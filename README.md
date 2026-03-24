@@ -22,6 +22,10 @@ https://raw.githubusercontent.com/espressif/arduino-esp32/gh-pages/package_esp32
 
 开发板管理器中安装esp32扩展
 
+水压计：https://github.com/bluerobotics/BlueRobotics_MS5837_Library
+
+MissionManager
+
 如果使用windows开启热点，似乎需要配置入站规则
 
 ![入站规则](./docs/入站规则.png)
@@ -34,10 +38,10 @@ https://raw.githubusercontent.com/espressif/arduino-esp32/gh-pages/package_esp32
 - 方案 B：ArduinoOTA —— 更像“无线烧写”，适合后续自动化上传
 
 使用方案 A，步骤：
+
 - 默认的 Partition Scheme 带有OTA分区，不用动
 - 用 USB 第一次烧入“OTA 底包”。
 - 打开串口监视器，记下它打印出来的 IP。
-- 之后可以使用：`Sketch -> Export Compiled Binary`，导出编译好的`.bin`文件
+- 之后可以使用：`Sketch -> Export Compiled Binary`，导出编译好的 `.bin`文件
 
 方案 B 暂时没试
-
