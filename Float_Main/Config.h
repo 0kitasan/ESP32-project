@@ -35,7 +35,9 @@
 #define MQTT_USER           "admin"
 #define MQTT_PASSWORD       "Ciallo~114"
 #define MQTT_TOPIC_CMD      "/cmd"
-#define MQTT_TOPIC_COUNTER  "/counter" //DEBUG
+#define MQTT_TOPIC_COUNTER  "/counter" //MQTT_TEST
+#define MQTT_TOPIC_DEBUG    "/debug" //DEBUG
+
 
 #define MQTT_CLIENT_ID     "esp32-counter"
 

@@ -18,16 +18,22 @@ FloatManager myManager(&mySensor, &myMotor, &myMqtt, &myStorage);
 
 void setup() {
   Serial.begin(115200);
-  delay(1000); // 等待串口稳定
+  delay(500); // 等待串口稳定
 
   // 初始化硬件
   mySensor.init();
   myMotor.init();
   myMqtt.begin();
   myStorage.init();
+  delay(500); // 等待串口稳定
 
   // 初始化逻辑
   myManager.init();
+  debugBegin(&myMqtt);
+  // debug逻辑测试
+  debugInfo("system boot");
+  debugWarn("example: wifi reconnecting");
+  debugError("example: sensor init failed");
   ArduinoOTA.begin();
 }
 
