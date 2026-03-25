@@ -1,0 +1,33 @@
+# ===== Arduino / build outputs =====
+build/
+*.bin
+*.elf
+*.map
+*.hex
+
+# ===== Arduino IDE temporary / exported artifacts =====
+*.ino.bootloader.bin
+*.ino.partitions.bin
+*.ino.bin
+*.merged.bin
+
+# ===== OS files =====
+.DS_Store
+Thumbs.db
+
+# ===== Editor / IDE =====
+.vscode/
+.idea/
+
+# ===== Python cache (if later tools/scripts are added) =====
+__pycache__/
+*.pyc
+
+# ===== Logs / local debug outputs =====
+*.log
+
+# ===== Local config / secrets =====
+.env
+.env.*
+secrets.h
+wifi_secrets.h

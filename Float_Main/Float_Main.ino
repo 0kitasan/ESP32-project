@@ -44,7 +44,7 @@ unsigned long lastSendMs = 0;
 void loop() {
 
   debugMQTT(myMqtt, running, counter, lastSendMs);
-  // debugSensor();
+  debugSensor(mySensor);
 
 
   // myMotor.setThrust(1.0);

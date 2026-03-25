@@ -80,31 +80,36 @@ void debugMQTT(MqttLink& mqtt, bool& running, unsigned long& counter, unsigned l
   }
 }
 
-void debugSensor() {
-  // 获取当前时间
-  // unsigned long currentMillis = millis();
+void debugSensor(SensorDriver& sensor) {
+  unsigned long currentMillis = millis();
 
-  // // 1. 更新感知 (读取所有传感器)
-  // mySensor.update();
+  // 1. 更新感知
+  sensor.update();
 
-  // // 获取当前水压计数据
-  // float depth = mySensor.getDepth();
-  // float pressure = mySensor.getPressure();
-  // float temp = mySensor.getTemp();
+  // 2. 读取数据
+  float depth = sensor.getDepth();
+  float pressure = sensor.getPressure();
+  float temp = sensor.getTemp();
 
-  // Serial.print("[Time: ");
-  // Serial.print(currentMillis / 1000.0);
-  // Serial.print("s] ");
+  // 3. 拼接日志
+  String msg;
+  msg.reserve(96);
 
-  // Serial.print("Depth: ");
-  // Serial.print(depth, 3);
-  // Serial.print(" m  |  ");
+  msg += "[Time: ";
+  msg += String(currentMillis / 1000.0, 2);
+  msg += "s] ";
 
-  // Serial.print("Pressure: ");
-  // Serial.print(pressure, 1);
-  // Serial.print(" mbar  |  ");
+  msg += "Depth: ";
+  msg += String(depth, 3);
+  msg += " m | ";
 
-  // Serial.print("Temp: ");
-  // Serial.print(temp, 2);
-  // Serial.println(" C");
+  msg += "Pressure: ";
+  msg += String(pressure, 1);
+  msg += " mbar | ";
+
+  msg += "Temp: ";
+  msg += String(temp, 2);
+  msg += " C";
+
+  debugInfo(msg);
 }

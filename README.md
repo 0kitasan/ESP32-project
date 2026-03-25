@@ -26,6 +26,7 @@ https://raw.githubusercontent.com/espressif/arduino-esp32/gh-pages/package_esp32
 开发板管理器中安装 esp32 扩展：
 
 - 有两个版本，不要安装错，要安装 `espressif` 的
+- `esp32`(by Espressif Systems)`3.3.7`
 - https://github.com/espressif/arduino-esp32
 
 无线配置：如果使用 windows 开启热点，似乎需要配置入站规则
@@ -40,11 +41,14 @@ https://raw.githubusercontent.com/espressif/arduino-esp32/gh-pages/package_esp32
 
 当前代码中使用的库：
 
-- WiFi.h
-- PubSubClient.h
-- ArduinoOTA.h
-- 水压计：https://github.com/bluerobotics/BlueRobotics_MS5837_Library
-- BlueRobotics_MS5837_Library
+- 通信：
+  - WiFi.h
+  - PubSubClient.h
+  - ArduinoOTA.h
+- 硬件：
+  - 水压计：https://github.com/bluerobotics/BlueRobotics_MS5837_Library
+  - `BlueRobotics MS5837 Library`(by BlueRobotics)`1.1.1`
+  - Wire.h（用于 I2C）
 - 其他项目内自定义头文件：
   - Config.h
   - Debug.h（应当在顶层 `main` 中调用，底层直接有线调试，在串口打印）
@@ -63,6 +67,8 @@ https://raw.githubusercontent.com/espressif/arduino-esp32/gh-pages/package_esp32
   - 需要先填写密码
   - 不支持仅上传，总是喜欢编译一遍再上传
 
+![无线烧写](./docs/无线烧写.png)
+
 ### 工具依赖
 
 - Mosquitto
@@ -76,16 +82,21 @@ netstat -ano | findstr :1883
 arp -a
 ```
 
-或者 espota 上传（还没试）
+或者直接使用 espota 上传
 
 ```powershell
-espota.exe -i 192.168.137.42 -p 3232 -f firmware.bin
-espota.exe -i 192.168.137.42 -p 3232 -a your_password -f firmware.bin
+.\espota.exe -i 192.168.137.3 -p 3232 -f firmware.bin
+.\espota.exe -i 192.168.137.3 -p 3232 -a your_password -f firmware.bin
 ```
 
 ```powershell
 C:\Users\[user]\AppData\Local\Arduino15\packages\esp32\hardware\esp32\3.3.7\tools
 ```
+
+这样可以防止 arduino 再编译一遍再上传，不然纯纯浪费时间：
+
+- `Ctrl + Alt + S`
+- 项目-导出编译的二进制文件/Sketch-Export
 
 linux 好像只能用 py 吧：
 
