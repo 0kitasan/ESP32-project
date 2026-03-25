@@ -50,15 +50,16 @@ void debugMQTT(MqttLink& mqtt, bool& running, unsigned long& counter, unsigned l
 
     if (cmd == "start") {
       running = true;
-      debugInfo("cmd=start");
+      Serial.println("cmd=start");
     } else if (cmd == "stop") {
       running = false;
-      debugInfo("cmd=stop");
+      Serial.println("cmd=stop");
     } else if (cmd == "clear") {
       counter = 0;
-      debugInfo("cmd=clear");
+      Serial.println("cmd=clear");
     } else {
-      debugWarn(String("unknown cmd: ") + cmd);
+      Serial.print("unknown cmd: ");
+      Serial.println(cmd);
     }
 
     mqtt.clearCommand();
@@ -72,10 +73,8 @@ void debugMQTT(MqttLink& mqtt, bool& running, unsigned long& counter, unsigned l
     char buf[32];
     snprintf(buf, sizeof(buf), "%lu", counter);
 
-    if (mqtt.publishRaw(MQTT_TOPIC_COUNTER, buf)) {
-      debugInfo(String("publish counter=") + buf);
-    } else {
-      debugWarn("publish counter failed");
+    if (!mqtt.publishRaw(MQTT_TOPIC_COUNTER, buf)) {
+      Serial.println("publish counter failed");
     }
   }
 }

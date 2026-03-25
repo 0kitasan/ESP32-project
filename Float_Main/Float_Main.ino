@@ -45,7 +45,7 @@ void loop() {
 
   debugMQTT(myMqtt, running, counter, lastSendMs);
   debugSensor(mySensor);
-
+  delay(100);
 
   // myMotor.setThrust(1.0);
   // Serial.println("Thrust set to 1.0 (100%)");

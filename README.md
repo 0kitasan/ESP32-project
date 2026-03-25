@@ -51,9 +51,17 @@ https://raw.githubusercontent.com/espressif/arduino-esp32/gh-pages/package_esp32
   - Wire.h（用于 I2C）
 - 其他项目内自定义头文件：
   - Config.h
-  - Debug.h（应当在顶层 `main` 中调用，底层直接有线调试，在串口打印）
+  - Debug.h
+    - 包括日志（串口与MQTT TOPIC）以及 MQTT 最小链路测试
+    - 日志应当在顶层 `main` 中调用，底层则直接走有线调试，在串口打印
   - MqttLink.h
   - FloatManager.h（改个名字吧，Mission 之类的）
+
+### 需要注意
+
+- 是否阻塞运行？
+- 日志的输出延时？
+- 控制
 
 ### 无线烧写配置
 
