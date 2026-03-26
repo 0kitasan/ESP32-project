@@ -15,6 +15,7 @@ void debugError(const String &msg);
 
 // ---------- MQTT 最小链路 ----------
 void debugMQTT(MqttLink &mqtt, bool &running, unsigned long &counter, unsigned long &lastSendMs);
+void debugMotorRemote(MqttLink &mqtt, MotorDriver &motor);
 
 // ---------- 模块测试 ----------
 void debugSensor(SensorDriver &sensor);

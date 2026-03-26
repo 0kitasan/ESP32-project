@@ -27,6 +27,50 @@ namespace
       g_mqtt->publishRaw(MQTT_TOPIC_DEBUG, line.c_str());
     }
   }
+
+  bool parseMotorRemoteCommand(const String &rawCmd, float &speed,
+                               unsigned long &durationMs)
+  {
+    String cmd = rawCmd;
+    cmd.trim();
+
+    if (cmd.length() == 0)
+    {
+      return false;
+    }
+
+    if (cmd.startsWith("motor"))
+    {
+      cmd.remove(0, 5);
+      cmd.trim();
+      if (cmd.startsWith(":") || cmd.startsWith(","))
+      {
+        cmd.remove(0, 1);
+        cmd.trim();
+      }
+    }
+
+    cmd.replace(",", " ");
+    cmd.replace(":", " ");
+    cmd.replace(";", " ");
+    cmd.trim();
+
+    float parsedSpeed = 0.0f;
+    unsigned long parsedDurationMs = 0;
+    if (sscanf(cmd.c_str(), "%f %lu", &parsedSpeed, &parsedDurationMs) != 2)
+    {
+      return false;
+    }
+
+    if (parsedSpeed < -1.0f || parsedSpeed > 1.0f || parsedDurationMs == 0)
+    {
+      return false;
+    }
+
+    speed = parsedSpeed;
+    durationMs = parsedDurationMs;
+    return true;
+  }
 }
 
 void debugBegin(MqttLink *mqtt)
@@ -95,6 +139,66 @@ void debugMQTT(MqttLink &mqtt, bool &running, unsigned long &counter, unsigned l
       Serial.println("publish counter failed");
     }
   }
+}
+
+void debugMotorRemote(MqttLink &mqtt, MotorDriver &motor)
+{
+  static bool motorRunning = false;
+  static float currentSpeed = 0.0f;
+  static unsigned long stopAtMs = 0;
+
+  mqtt.update();
+
+  unsigned long now = millis();
+
+  if (motorRunning && (long)(now - stopAtMs) >= 0)
+  {
+    motor.stop();
+    motorRunning = false;
+
+    String msg = "motor stop timeout speed=";
+    msg += String(currentSpeed, 3);
+    debugInfo(msg);
+  }
+
+  if (!mqtt.hasNewCommand())
+  {
+    return;
+  }
+
+  String cmd = mqtt.latestCommand();
+  mqtt.clearCommand();
+  cmd.trim();
+
+  if (cmd.equalsIgnoreCase("stop") || cmd.equalsIgnoreCase("motor stop") ||
+      cmd.equalsIgnoreCase("motor_stop"))
+  {
+    motor.stop();
+    motorRunning = false;
+    currentSpeed = 0.0f;
+    stopAtMs = 0;
+    debugWarn("motor stop by remote cmd");
+    return;
+  }
+
+  float speed = 0.0f;
+  unsigned long durationMs = 0;
+  if (!parseMotorRemoteCommand(cmd, speed, durationMs))
+  {
+    debugError("invalid motor cmd, use: <speed>,<duration_ms> or stop");
+    return;
+  }
+
+  motor.setThrust(speed);
+  motorRunning = true;
+  currentSpeed = speed;
+  stopAtMs = now + durationMs;
+
+  String msg = "motor start speed=";
+  msg += String(speed, 3);
+  msg += ", duration_ms=";
+  msg += String(durationMs);
+  debugInfo(msg);
 }
 
 void debugSensor(SensorDriver &sensor)

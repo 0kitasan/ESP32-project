@@ -35,19 +35,15 @@ void setup()
   debugBegin(&myMqtt);
   // debug逻辑测试
   debugInfo("system boot");
+  debugInfo("motor cmd format: <speed>,<duration_ms> or stop");
   debugWarn("example: wifi reconnecting");
   debugError("example: sensor init failed");
   ArduinoOTA.begin();
 }
 
-bool running = false;
-unsigned long counter = 0;
-unsigned long lastSendMs = 0;
-
 void loop()
 {
-
-  debugMQTT(myMqtt, running, counter, lastSendMs);
+  debugMotorRemote(myMqtt, myMotor);
   // debugSensor(mySensor);
   // delay(100);
 
@@ -66,7 +62,7 @@ void loop()
   // Serial.println("Pump stopped");
   // delay(1000); // 停止2秒
 
-  debugPump(myPump);
+  // debugPump(myPump);
   // debugPumpStartThreshold(myMotor);
   //  // 2. 更新决策 (计算状态机、PID、处理数据记录)
   //  myManager.update();

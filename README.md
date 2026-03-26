@@ -109,8 +109,8 @@ C:\Users\[user]\AppData\Local\Arduino15\packages\esp32\hardware\esp32\3.3.7\tool
 linux 好像只能用 py 吧：
 
 ```bash
-python3 ~/.arduino15/packages/esp32/hardware/esp32/3.3.7/tools/espota.py \
-  -i 192.168.1.100 \
+python3 ~/.arduino15/packages/esp32/hardware/esp32/3.3.3/tools/espota.py \
+  -i 192.168.8.109 \
   -p 3232 \
-  -f ./build/your_firmware.bin
+  -f ~/Workspace/git-prog/ESP32-project/Float_Main_PIO/.pio/build/seeed_xiao_esp32c3/firmware.bin
 ```
