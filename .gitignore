@@ -18,6 +18,7 @@ Thumbs.db
 # ===== Editor / IDE =====
 .vscode/
 .idea/
+.pio
 
 # ===== Python cache (if later tools/scripts are added) =====
 __pycache__/

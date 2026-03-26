@@ -5,15 +5,16 @@
 #include "Config.h"
 
 // 电机驱动类：基于 A4950 + ESP32 LEDC
-class MotorDriver {
+class MotorDriver
+{
 private:
     int in1_ledc_channel_;
     int in2_ledc_channel_;
 
 public:
     // PWM 配置常量
-    static constexpr int PUMP_PWM_FREQ = 5000;       // 5 kHz
-    static constexpr int PUMP_PWM_RESOLUTION = 8;    // 8-bit
+    static constexpr int PUMP_PWM_FREQ = 5000;    // 5 kHz
+    static constexpr int PUMP_PWM_RESOLUTION = 8; // 8-bit
     static constexpr int PUMP_PWM_MAX_DUTY = (1 << PUMP_PWM_RESOLUTION) - 1;
 
     // 构造函数

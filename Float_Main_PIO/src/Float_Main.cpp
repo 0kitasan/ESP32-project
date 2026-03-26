@@ -1,11 +1,11 @@
 #include "Config.h"
+#include "Debug.h"
 #include "FloatManager.h"
 #include "MotorDriver.h"
 #include "MqttLink.h"
+#include "Pump.h"
 #include "SensorDriver.h"
 #include "StorageDriver.h"
-#include "Debug.h"
-#include "Pump.h"
 #include <ArduinoOTA.h>
 
 // 1. 实例化所有硬件驱动
@@ -18,7 +18,8 @@ StorageDriver myStorage;
 // 2. 实例化管理器，并将驱动传给它
 FloatManager myManager(&mySensor, &myMotor, &myMqtt, &myStorage);
 
-void setup() {
+void setup()
+{
   Serial.begin(115200);
   delay(500); // 等待串口稳定
 
@@ -43,7 +44,8 @@ bool running = false;
 unsigned long counter = 0;
 unsigned long lastSendMs = 0;
 
-void loop() {
+void loop()
+{
 
   debugMQTT(myMqtt, running, counter, lastSendMs);
   // debugSensor(mySensor);
@@ -65,9 +67,9 @@ void loop() {
   // delay(1000); // 停止2秒
 
   debugPump(myPump);
-  //debugPumpStartThreshold(myMotor);
-  // // 2. 更新决策 (计算状态机、PID、处理数据记录)
-  // myManager.update();
+  // debugPumpStartThreshold(myMotor);
+  //  // 2. 更新决策 (计算状态机、PID、处理数据记录)
+  //  myManager.update();
 
   // 3. (可选) 如果MotorDriver需要平滑控制，也可以在这里加 update
   // myMotor.update();
