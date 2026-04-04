@@ -6,6 +6,7 @@
 #include "SensorDriver.h"
 #include "MotorDriver.h"
 #include "Pump.h"
+#include "Control.h"
 
 // ---------- 日志接口 ----------
 void debugBegin(MqttLink *mqtt);
@@ -16,10 +17,14 @@ void debugError(const String &msg);
 // ---------- MQTT 最小链路 ----------
 void debugMQTT(MqttLink &mqtt, bool &running, unsigned long &counter, unsigned long &lastSendMs);
 void debugMotorRemote(MqttLink &mqtt, MotorDriver &motor);
+void debugFakeHistoryUpload(MqttLink &mqtt);
+void debugDepthMission(MqttLink &mqtt, SensorDriver &sensor, Pump &pump,
+                       Control &control, bool enableVolumeLimit = true,
+                       unsigned long forceDrainAfterMs = 30000,
+                       unsigned long forceDrainDurationMs = 10000);
 
 // ---------- 模块测试 ----------
 void debugSensor(SensorDriver &sensor);
-void debugPump(Pump &pump);
-void debugPumpStartThreshold(MotorDriver &motor);
+void debugPumpRemote(MqttLink &mqtt, Pump &pump);
 
 #endif

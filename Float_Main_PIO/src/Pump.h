@@ -44,14 +44,14 @@ public:
   // 容积估计值读写
   float getEstimatedVolumeMl() const;
   void setEstimatedVolumeMl(float volume_ml);
-
-  // 极性
-  void setInverted(bool inverted);
-  bool isInverted() const;
+  void setVolumeLimitEnabled(bool enabled);
 
   // 是否已经碰到上下限
   bool isAtUpperLimit() const;
   bool isAtLowerLimit() const;
+
+private:
+  bool volume_limit_enabled_;
 };
 
 #endif

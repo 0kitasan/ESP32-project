@@ -1,12 +1,16 @@
 #include "MqttLink.h"
-#include "Config.h"
+
+#include <string.h>
 
 MqttLink *MqttLink::instance_ = nullptr;
 
 MqttLink::MqttLink()
     : mqttClient_(wifiClient_),
-      latestCmd_(""),
-      hasNewCmd_(false),
+      commandSlots_{{MQTT_TOPIC_CMD_MISSION, "", false},
+                    {MQTT_TOPIC_CMD_MOTOR, "", false},
+                    {MQTT_TOPIC_CMD_PUMP, "", false},
+                    {MQTT_TOPIC_CMD_COUNTER, "", false}},
+      emptyCmd_(""),
       lastWifiRetryMs_(0),
       lastMqttRetryMs_(0)
 {
@@ -60,6 +64,45 @@ bool MqttLink::isMqttConnected()
   return mqttClient_.connected();
 }
 
+bool MqttLink::hasNewCommand(const char *topic) const
+{
+  const CommandSlot *slot = findCommandSlot(topic);
+  return slot != nullptr && slot->hasNewCmd;
+}
+
+const String &MqttLink::latestCommand(const char *topic) const
+{
+  const CommandSlot *slot = findCommandSlot(topic);
+  return slot != nullptr ? slot->latestCmd : emptyCmd_;
+}
+
+void MqttLink::clearCommand(const char *topic)
+{
+  CommandSlot *slot = findCommandSlot(topic);
+  if (slot == nullptr)
+  {
+    return;
+  }
+
+  slot->latestCmd = "";
+  slot->hasNewCmd = false;
+}
+
+bool MqttLink::hasNewCommand() const
+{
+  return hasNewCommand(MQTT_TOPIC_CMD_MISSION);
+}
+
+const String &MqttLink::latestCommand() const
+{
+  return latestCommand(MQTT_TOPIC_CMD_MISSION);
+}
+
+void MqttLink::clearCommand()
+{
+  clearCommand(MQTT_TOPIC_CMD_MISSION);
+}
+
 bool MqttLink::publishRaw(const char *topic, const char *payload)
 {
   if (!mqttClient_.connected())
@@ -81,20 +124,74 @@ bool MqttLink::publishCounter(unsigned long value)
   return mqttClient_.publish(MQTT_TOPIC_COUNTER, buf);
 }
 
-bool MqttLink::hasNewCommand() const
+bool MqttLink::publishDepthSample(unsigned long idx, unsigned long timeMs,
+                                  float depthM)
 {
-  return hasNewCmd_;
+  String payload;
+  payload.reserve(80);
+  payload += "{\"idx\":";
+  payload += String(idx);
+  payload += ",\"time_ms\":";
+  payload += String(timeMs);
+  payload += ",\"depth_m\":";
+  payload += String(depthM, 3);
+  payload += "}";
+
+  return publishRaw(MQTT_TOPIC_HISTORY, payload.c_str());
 }
 
-const String &MqttLink::latestCommand() const
+void MqttLink::sendRealtimeData(float depth)
 {
-  return latestCmd_;
+  String payload;
+  payload.reserve(48);
+  payload += "{\"time_ms\":";
+  payload += String(millis());
+  payload += ",\"depth_m\":";
+  payload += String(depth, 3);
+  payload += "}";
+
+  publishRaw(MQTT_TOPIC_REALTIME, payload.c_str());
 }
 
-void MqttLink::clearCommand()
+void MqttLink::sendHistoryLine(const String &line)
 {
-  latestCmd_ = "";
-  hasNewCmd_ = false;
+  publishRaw(MQTT_TOPIC_HISTORY, line.c_str());
+}
+
+MqttLink::CommandSlot *MqttLink::findCommandSlot(const char *topic)
+{
+  if (topic == nullptr)
+  {
+    return nullptr;
+  }
+
+  for (size_t i = 0; i < kCommandSlotCount; ++i)
+  {
+    if (strcmp(commandSlots_[i].topic, topic) == 0)
+    {
+      return &commandSlots_[i];
+    }
+  }
+
+  return nullptr;
+}
+
+const MqttLink::CommandSlot *MqttLink::findCommandSlot(const char *topic) const
+{
+  if (topic == nullptr)
+  {
+    return nullptr;
+  }
+
+  for (size_t i = 0; i < kCommandSlotCount; ++i)
+  {
+    if (strcmp(commandSlots_[i].topic, topic) == 0)
+    {
+      return &commandSlots_[i];
+    }
+  }
+
+  return nullptr;
 }
 
 void MqttLink::mqttCallback(char *topic, byte *payload, unsigned int length)
@@ -120,10 +217,11 @@ void MqttLink::handleMessage(char *topic, byte *payload, unsigned int length)
   Serial.print("] ");
   Serial.println(msg);
 
-  if (String(topic) == MQTT_TOPIC_CMD)
+  CommandSlot *slot = findCommandSlot(topic);
+  if (slot != nullptr)
   {
-    latestCmd_ = msg;
-    hasNewCmd_ = true;
+    slot->latestCmd = msg;
+    slot->hasNewCmd = true;
   }
 }
 
@@ -185,9 +283,12 @@ void MqttLink::connectMqtt()
   if (ok)
   {
     Serial.println("connected");
-    mqttClient_.subscribe(MQTT_TOPIC_CMD);
-    Serial.print("Subscribed: ");
-    Serial.println(MQTT_TOPIC_CMD);
+    for (size_t i = 0; i < kCommandSlotCount; ++i)
+    {
+      mqttClient_.subscribe(commandSlots_[i].topic);
+      Serial.print("Subscribed: ");
+      Serial.println(commandSlots_[i].topic);
+    }
   }
   else
   {

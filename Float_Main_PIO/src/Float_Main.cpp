@@ -1,4 +1,5 @@
 #include "Config.h"
+#include "Control.h"
 #include "Debug.h"
 #include "FloatManager.h"
 #include "MotorDriver.h"
@@ -8,11 +9,19 @@
 #include "StorageDriver.h"
 #include <ArduinoOTA.h>
 
+namespace
+{
+constexpr bool kMissionEnableVolumeLimit = false;
+constexpr unsigned long kMissionForceDrainAfterMs = 30000;
+constexpr unsigned long kMissionForceDrainDurationMs = 10000;
+}
+
 // 1. 实例化所有硬件驱动
 SensorDriver mySensor;
 MotorDriver myMotor;
 MqttLink myMqtt;
-Pump myPump(myMotor, false, 0.0f, 40.0f);
+Pump myPump(myMotor, true, 0.0f, 400.0f);
+Control myControl;
 StorageDriver myStorage;
 
 // 2. 实例化管理器，并将驱动传给它
@@ -25,7 +34,7 @@ void setup()
 
   // 初始化硬件
   mySensor.init();
-  myMotor.init();
+  myPump.init();
   myMqtt.begin();
   myStorage.init();
   delay(500); // 等待串口稳定
@@ -35,7 +44,20 @@ void setup()
   debugBegin(&myMqtt);
   // debug逻辑测试
   debugInfo("system boot");
+  debugInfo("mission cmd topic: " MQTT_TOPIC_CMD_MISSION);
+  debugInfo("motor cmd topic: " MQTT_TOPIC_CMD_MOTOR);
+  debugInfo("pump cmd topic: " MQTT_TOPIC_CMD_PUMP);
+  debugInfo("counter cmd topic: " MQTT_TOPIC_CMD_COUNTER);
   debugInfo("motor cmd format: <speed>,<duration_ms> or stop");
+  debugInfo("mission status topic: " MQTT_TOPIC_STATUS);
+  debugInfo("pump sign convention: +fill/down, -drain/up");
+  debugInfo("mission force drain defaults: after_ms=" +
+            String(kMissionForceDrainAfterMs) + ", duration_ms=" +
+            String(kMissionForceDrainDurationMs));
+  debugInfo("mission cmd format: start:<depth_m>,drain_after_ms=<ms>,drain_duration_ms=<ms> or {\"target_depth_m\":<depth_m>}");
+  debugInfo("history sample format: {\"idx\":n,\"time_ms\":t,\"depth_m\":d}");
+  debugInfo("mission volume limit: " + String(kMissionEnableVolumeLimit ? "on" : "off"));
+  debugInfo("status topic reports current depth before dive");
   debugWarn("example: wifi reconnecting");
   debugError("example: sensor init failed");
   ArduinoOTA.begin();
@@ -43,32 +65,15 @@ void setup()
 
 void loop()
 {
-  debugMotorRemote(myMqtt, myMotor);
+  // 命令 topic 已拆分，但共享同一执行器的测试入口仍不应同时启用。
+  debugDepthMission(myMqtt, mySensor, myPump, myControl,
+                    kMissionEnableVolumeLimit,
+                    kMissionForceDrainAfterMs,
+                    kMissionForceDrainDurationMs);
+  // debugFakeHistoryUpload(myMqtt);
+  // debugMotorRemote(myMqtt, myMotor);
   // debugSensor(mySensor);
-  // delay(100);
-
-  // myMotor.setThrust(1.0);
-  // Serial.println("Thrust set to 1.0 (100%)");
-  // delay(1000); // 持续2秒
-  // // 停止
-  // myMotor.stop();
-  // Serial.println("Pump stopped");
-  // delay(1000); // 停止2秒
-  // myMotor.setThrust(-1.0);
-  // Serial.println("Thrust set to -1.0 (-100%)");
-  // delay(1000); // 持续2秒
-  // // 停止
-  // myMotor.brake();
-  // Serial.println("Pump stopped");
-  // delay(1000); // 停止2秒
-
-  // debugPump(myPump);
-  // debugPumpStartThreshold(myMotor);
-  //  // 2. 更新决策 (计算状态机、PID、处理数据记录)
-  //  myManager.update();
-
-  // 3. (可选) 如果MotorDriver需要平滑控制，也可以在这里加 update
-  // myMotor.update();
+  // debugPumpRemote(myMqtt, myPump);
 
   // 4. 控制频率 (简单的延时，或者用 millis 控制固定周期)
   delay(10);

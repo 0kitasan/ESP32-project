@@ -5,6 +5,96 @@ namespace
 {
   MqttLink *g_mqtt = nullptr;
   unsigned long g_logSeq = 0;
+  constexpr unsigned long kFakeHistoryIntervalMs = 50;
+  constexpr unsigned long kFakeHistorySampleCount = 50;
+  constexpr unsigned long kFakeMissionDurationMs = 29500;
+  constexpr unsigned long kDebugReadyStatusIntervalMs = 2000;
+  constexpr unsigned long kDebugHistoryLogIntervalMs = 500;
+  constexpr unsigned long kDebugUploadIntervalMs = 50;
+  constexpr size_t kDebugMaxHistorySamples = 256;
+
+  struct DebugDepthSample
+  {
+    unsigned long timeMs;
+    float depthM;
+  };
+
+  struct MissionCommand
+  {
+    enum Type
+    {
+      NONE,
+      START,
+      STATUS,
+      SURFACE,
+      INVALID
+    };
+
+    Type type = NONE;
+    float targetDepthM = 0.0f;
+    unsigned long forceDrainAfterMs = 30000;
+    unsigned long forceDrainDurationMs = 10000;
+    Control::Params params;
+  };
+
+  Control::Params defaultControlParams()
+  {
+    Control::Params params;
+    params.kp = CTRL_KP_DEFAULT;
+    params.kd = CTRL_KD_DEFAULT;
+    params.outputLimit = CTRL_OUTPUT_LIMIT_DEFAULT;
+    params.minActuationCmd = CTRL_MIN_ACTUATION_CMD_DEFAULT;
+    params.holdEnterBandM = CTRL_HOLD_ENTER_BAND_M_DEFAULT;
+    params.holdExitBandM = CTRL_HOLD_EXIT_BAND_M_DEFAULT;
+    params.derivativeFilterAlpha = CTRL_DERIVATIVE_FILTER_ALPHA_DEFAULT;
+    return params;
+  }
+
+  float lerpDepth(float startDepth, float endDepth, unsigned long elapsedMs,
+                  unsigned long durationMs)
+  {
+    if (durationMs == 0)
+    {
+      return endDepth;
+    }
+
+    float alpha = (float)elapsedMs / (float)durationMs;
+    alpha = constrain(alpha, 0.0f, 1.0f);
+    return startDepth + (endDepth - startDepth) * alpha;
+  }
+
+  float fakeDepthAt(unsigned long timeMs)
+  {
+    if (timeMs <= 5000)
+    {
+      return lerpDepth(0.0f, 2.5f, timeMs, 5000);
+    }
+    if (timeMs <= 11000)
+    {
+      return 2.5f;
+    }
+    if (timeMs <= 16000)
+    {
+      return lerpDepth(2.5f, 0.4f, timeMs - 11000, 5000);
+    }
+    if (timeMs <= 20000)
+    {
+      return 0.4f;
+    }
+    if (timeMs <= 25000)
+    {
+      return lerpDepth(0.4f, 1.8f, timeMs - 20000, 5000);
+    }
+    if (timeMs <= 27500)
+    {
+      return 1.8f;
+    }
+    if (timeMs <= kFakeMissionDurationMs)
+    {
+      return lerpDepth(1.8f, 0.0f, timeMs - 27500, 2000);
+    }
+    return 0.0f;
+  }
 
   void debugWrite(const char *level, const String &msg)
   {
@@ -71,6 +161,296 @@ namespace
     durationMs = parsedDurationMs;
     return true;
   }
+
+  bool appendDepthSample(DebugDepthSample *samples, size_t capacity,
+                         size_t &sampleCount, unsigned long timeMs,
+                         float depthM)
+  {
+    if (sampleCount >= capacity)
+    {
+      return false;
+    }
+
+    samples[sampleCount].timeMs = timeMs;
+    samples[sampleCount].depthM = depthM;
+    sampleCount++;
+    return true;
+  }
+
+  bool parseLeadingFloat(const String &text, float &value)
+  {
+    for (int i = 0; i < text.length(); ++i)
+    {
+      char c = text.charAt(i);
+      if ((c >= '0' && c <= '9') || c == '-' || c == '+' || c == '.')
+      {
+        return sscanf(text.c_str() + i, "%f", &value) == 1;
+      }
+    }
+    return false;
+  }
+
+  bool extractJsonFloat(const String &text, const char *key, float &value)
+  {
+    int keyPos = text.indexOf(key);
+    if (keyPos < 0)
+    {
+      return false;
+    }
+
+    int colonPos = text.indexOf(':', keyPos);
+    if (colonPos < 0)
+    {
+      return false;
+    }
+
+    String tail = text.substring(colonPos + 1);
+    tail.trim();
+    return parseLeadingFloat(tail, value);
+  }
+
+  bool extractAssignedFloat(const String &text, const char *key, float &value)
+  {
+    String pattern = String(key) + "=";
+    int pos = text.indexOf(pattern);
+    if (pos < 0)
+    {
+      return false;
+    }
+
+    String tail = text.substring(pos + pattern.length());
+    tail.trim();
+    return parseLeadingFloat(tail, value);
+  }
+
+  bool extractAssignedBool(const String &text, const char *key, bool &value)
+  {
+    float parsed = 0.0f;
+    if (!extractAssignedFloat(text, key, parsed))
+    {
+      return false;
+    }
+
+    value = parsed != 0.0f;
+    return true;
+  }
+
+  bool parseLeadingUnsignedLong(const String &text, unsigned long &value)
+  {
+    for (int i = 0; i < text.length(); ++i)
+    {
+      char c = text.charAt(i);
+      if (c >= '0' && c <= '9')
+      {
+        return sscanf(text.c_str() + i, "%lu", &value) == 1;
+      }
+    }
+    return false;
+  }
+
+  bool extractJsonUnsignedLong(const String &text, const char *key,
+                               unsigned long &value)
+  {
+    int keyPos = text.indexOf(key);
+    if (keyPos < 0)
+    {
+      return false;
+    }
+
+    int colonPos = text.indexOf(':', keyPos);
+    if (colonPos < 0)
+    {
+      return false;
+    }
+
+    String tail = text.substring(colonPos + 1);
+    tail.trim();
+    return parseLeadingUnsignedLong(tail, value);
+  }
+
+  bool extractAssignedUnsignedLong(const String &text, const char *key,
+                                   unsigned long &value)
+  {
+    String pattern = String(key) + "=";
+    int pos = text.indexOf(pattern);
+    if (pos < 0)
+    {
+      return false;
+    }
+
+    String tail = text.substring(pos + pattern.length());
+    tail.trim();
+    return parseLeadingUnsignedLong(tail, value);
+  }
+
+  bool parsePumpRemoteCommand(const String &rawCmd, float &thrust,
+                              unsigned long &durationMs, bool &hasVolumeLimit,
+                              bool &volumeLimitEnabled)
+  {
+    String cmd = rawCmd;
+    cmd.trim();
+
+    if (cmd.length() == 0)
+    {
+      return false;
+    }
+
+    if (cmd.startsWith("pump"))
+    {
+      cmd.remove(0, 4);
+      cmd.trim();
+      if (cmd.startsWith(":") || cmd.startsWith(","))
+      {
+        cmd.remove(0, 1);
+        cmd.trim();
+      }
+    }
+
+    String lower = cmd;
+    lower.toLowerCase();
+
+    hasVolumeLimit = false;
+    if (extractAssignedBool(lower, "limit", volumeLimitEnabled) ||
+        extractAssignedBool(lower, "volume_limit", volumeLimitEnabled))
+    {
+      hasVolumeLimit = true;
+    }
+
+    lower.replace(",", " ");
+    lower.replace(":", " ");
+    lower.replace(";", " ");
+    lower.trim();
+
+    float parsedThrust = 0.0f;
+    unsigned long parsedDurationMs = 0;
+    if (sscanf(lower.c_str(), "%f %lu", &parsedThrust, &parsedDurationMs) != 2)
+    {
+      return false;
+    }
+
+    if (parsedThrust < -1.0f || parsedThrust > 1.0f || parsedDurationMs == 0)
+    {
+      return false;
+    }
+
+    thrust = parsedThrust;
+    durationMs = parsedDurationMs;
+    return true;
+  }
+
+  MissionCommand parseMissionCommand(const String &rawCmd,
+                                     unsigned long defaultForceDrainAfterMs,
+                                     unsigned long defaultForceDrainDurationMs)
+  {
+    MissionCommand result;
+    result.params = defaultControlParams();
+    result.forceDrainAfterMs = defaultForceDrainAfterMs;
+    result.forceDrainDurationMs = defaultForceDrainDurationMs;
+
+    String cmd = rawCmd;
+    cmd.trim();
+    if (cmd.length() == 0)
+    {
+      return result;
+    }
+
+    String lower = cmd;
+    lower.toLowerCase();
+
+    if (lower == "status" || lower == "depth" || lower == "depth?")
+    {
+      result.type = MissionCommand::STATUS;
+      return result;
+    }
+
+    if (lower == "surface" || lower == "stop" || lower == "abort")
+    {
+      result.type = MissionCommand::SURFACE;
+      return result;
+    }
+
+    float targetDepthM = 0.0f;
+    if (extractJsonFloat(lower, "target_depth_m", targetDepthM) ||
+        extractJsonFloat(lower, "depth_m", targetDepthM))
+    {
+      extractJsonFloat(lower, "kp", result.params.kp);
+      extractJsonFloat(lower, "kd", result.params.kd);
+      extractJsonUnsignedLong(lower, "force_drain_after_ms",
+                              result.forceDrainAfterMs);
+      extractJsonUnsignedLong(lower, "drain_after_ms",
+                              result.forceDrainAfterMs);
+      extractJsonUnsignedLong(lower, "force_drain_duration_ms",
+                              result.forceDrainDurationMs);
+      extractJsonUnsignedLong(lower, "drain_duration_ms",
+                              result.forceDrainDurationMs);
+      result.type = MissionCommand::START;
+      result.targetDepthM = targetDepthM;
+      return result;
+    }
+
+    if (lower.startsWith("start") || lower.startsWith("dive") ||
+        lower.startsWith("target"))
+    {
+      extractAssignedFloat(lower, "kp", result.params.kp);
+      extractAssignedFloat(lower, "kd", result.params.kd);
+      extractAssignedUnsignedLong(lower, "force_drain_after_ms",
+                                  result.forceDrainAfterMs);
+      extractAssignedUnsignedLong(lower, "drain_after_ms",
+                                  result.forceDrainAfterMs);
+      extractAssignedUnsignedLong(lower, "force_drain_duration_ms",
+                                  result.forceDrainDurationMs);
+      extractAssignedUnsignedLong(lower, "drain_duration_ms",
+                                  result.forceDrainDurationMs);
+      result.type = parseLeadingFloat(lower, targetDepthM) ? MissionCommand::START
+                                                           : MissionCommand::INVALID;
+      result.targetDepthM = targetDepthM;
+      return result;
+    }
+
+    if (parseLeadingFloat(lower, targetDepthM))
+    {
+      result.type = MissionCommand::START;
+      result.targetDepthM = targetDepthM;
+      return result;
+    }
+
+    result.type = MissionCommand::INVALID;
+    return result;
+  }
+
+  bool publishMissionStatus(MqttLink &mqtt, const char *state,
+                            unsigned long missionTimeMs, float depthM,
+                            float targetDepthM, const Control::Params &params,
+                            size_t sampleCount, size_t uploadIndex,
+                            unsigned long forceDrainAfterMs,
+                            unsigned long forceDrainDurationMs)
+  {
+    String payload;
+    payload.reserve(300);
+    payload += "{\"state\":\"";
+    payload += state;
+    payload += "\",\"time_ms\":";
+    payload += String(missionTimeMs);
+    payload += ",\"depth_m\":";
+    payload += String(depthM, 3);
+    payload += ",\"target_depth_m\":";
+    payload += String(targetDepthM, 3);
+    payload += ",\"kp\":";
+    payload += String(params.kp, 3);
+    payload += ",\"kd\":";
+    payload += String(params.kd, 3);
+    payload += ",\"force_drain_after_ms\":";
+    payload += String(forceDrainAfterMs);
+    payload += ",\"force_drain_duration_ms\":";
+    payload += String(forceDrainDurationMs);
+    payload += ",\"history_count\":";
+    payload += String((unsigned long)sampleCount);
+    payload += ",\"upload_index\":";
+    payload += String((unsigned long)uploadIndex);
+    payload += "}";
+
+    return mqtt.publishRaw(MQTT_TOPIC_STATUS, payload.c_str());
+  }
 }
 
 void debugBegin(MqttLink *mqtt)
@@ -97,9 +477,9 @@ void debugMQTT(MqttLink &mqtt, bool &running, unsigned long &counter, unsigned l
 {
   mqtt.update();
 
-  if (mqtt.hasNewCommand())
+  if (mqtt.hasNewCommand(MQTT_TOPIC_CMD_COUNTER))
   {
-    String cmd = mqtt.latestCommand();
+    String cmd = mqtt.latestCommand(MQTT_TOPIC_CMD_COUNTER);
 
     if (cmd == "start")
     {
@@ -122,7 +502,7 @@ void debugMQTT(MqttLink &mqtt, bool &running, unsigned long &counter, unsigned l
       Serial.println(cmd);
     }
 
-    mqtt.clearCommand();
+    mqtt.clearCommand(MQTT_TOPIC_CMD_COUNTER);
   }
 
   unsigned long now = millis();
@@ -161,13 +541,13 @@ void debugMotorRemote(MqttLink &mqtt, MotorDriver &motor)
     debugInfo(msg);
   }
 
-  if (!mqtt.hasNewCommand())
+  if (!mqtt.hasNewCommand(MQTT_TOPIC_CMD_MOTOR))
   {
     return;
   }
 
-  String cmd = mqtt.latestCommand();
-  mqtt.clearCommand();
+  String cmd = mqtt.latestCommand(MQTT_TOPIC_CMD_MOTOR);
+  mqtt.clearCommand(MQTT_TOPIC_CMD_MOTOR);
   cmd.trim();
 
   if (cmd.equalsIgnoreCase("stop") || cmd.equalsIgnoreCase("motor stop") ||
@@ -201,12 +581,390 @@ void debugMotorRemote(MqttLink &mqtt, MotorDriver &motor)
   debugInfo(msg);
 }
 
+void debugFakeHistoryUpload(MqttLink &mqtt)
+{
+  static bool announced = false;
+  static bool started = false;
+  static bool completed = false;
+  static unsigned long lastSendMs = 0;
+  static unsigned long sampleIdx = 0;
+
+  mqtt.update();
+
+  if (!announced)
+  {
+    announced = true;
+    debugInfo("fake history upload armed, waiting for MQTT");
+  }
+
+  if (completed || !mqtt.isMqttConnected())
+  {
+    return;
+  }
+
+  unsigned long now = millis();
+
+  if (!started)
+  {
+    started = true;
+    lastSendMs = now;
+    String msg = "fake surfaced history upload started -> ";
+    msg += MQTT_TOPIC_HISTORY;
+    msg += ", samples=";
+    msg += String(kFakeHistorySampleCount);
+    msg += ", send_interval_ms=";
+    msg += String(kFakeHistoryIntervalMs);
+    debugInfo(msg);
+  }
+
+  if (now - lastSendMs < kFakeHistoryIntervalMs)
+  {
+    return;
+  }
+
+  lastSendMs = now;
+
+  unsigned long sampleTimeMs = 0;
+  if (kFakeHistorySampleCount > 1)
+  {
+    sampleTimeMs =
+        (sampleIdx * kFakeMissionDurationMs) / (kFakeHistorySampleCount - 1);
+  }
+
+  float depth = fakeDepthAt(sampleTimeMs);
+  if (!mqtt.publishDepthSample(sampleIdx, sampleTimeMs, depth))
+  {
+    debugError("fake history upload publish failed");
+    return;
+  }
+
+  sampleIdx++;
+
+  if (sampleIdx >= kFakeHistorySampleCount)
+  {
+    completed = true;
+    String msg = "fake surfaced history upload completed, samples=";
+    msg += String(kFakeHistorySampleCount);
+    debugInfo(msg);
+  }
+}
+
+void debugDepthMission(MqttLink &mqtt, SensorDriver &sensor, Pump &pump,
+                       Control &control, bool enableVolumeLimit,
+                       unsigned long forceDrainAfterMs,
+                       unsigned long forceDrainDurationMs)
+{
+  enum Phase
+  {
+    WAIT_START_CMD,
+    CONTROL_TO_DEPTH,
+    FORCE_DRAIN,
+    WAIT_UPLOAD_LINK,
+    UPLOADING_HISTORY
+  };
+
+  static Phase phase = WAIT_START_CMD;
+  static unsigned long missionStartMs = 0;
+  static unsigned long drainStartMs = 0;
+  static unsigned long lastReadyStatusMs = 0;
+  static unsigned long lastLogMs = 0;
+  static unsigned long lastUploadMs = 0;
+  static size_t sampleCount = 0;
+  static size_t uploadIndex = 0;
+  static bool warnedHistoryFull = false;
+  static bool readyAnnounced = false;
+  static float targetDepthM = 0.0f;
+  static unsigned long activeForceDrainAfterMs = 0;
+  static unsigned long activeForceDrainDurationMs = 0;
+  static Control::Params activeParams = defaultControlParams();
+  static DebugDepthSample history[kDebugMaxHistorySamples];
+
+  pump.setVolumeLimitEnabled(enableVolumeLimit);
+
+  if (phase == WAIT_START_CMD || phase == WAIT_UPLOAD_LINK ||
+      phase == UPLOADING_HISTORY)
+  {
+    mqtt.update();
+  }
+  sensor.update();
+
+  unsigned long now = millis();
+  float depth = sensor.getDepth();
+
+  auto missionElapsedMs = [&]() -> unsigned long {
+    return missionStartMs == 0 ? 0 : now - missionStartMs;
+  };
+
+  auto logHistorySample = [&](bool force) {
+    if (!force && now - lastLogMs < kDebugHistoryLogIntervalMs)
+    {
+      return;
+    }
+
+    unsigned long timeMs = missionElapsedMs();
+    lastLogMs = now;
+
+    if (appendDepthSample(history, kDebugMaxHistorySamples, sampleCount, timeMs,
+                          depth))
+    {
+      return;
+    }
+
+    if (!warnedHistoryFull)
+    {
+      warnedHistoryFull = true;
+      debugWarn("depth history buffer full, dropping later samples");
+    }
+  };
+
+  auto publishReadyStatus = [&](bool force) {
+    if (!mqtt.isMqttConnected())
+    {
+      return;
+    }
+
+    if (!force && now - lastReadyStatusMs < kDebugReadyStatusIntervalMs)
+    {
+      return;
+    }
+
+    lastReadyStatusMs = now;
+    publishMissionStatus(mqtt, "ready", 0, depth, 0.0f, activeParams, 0, 0,
+                         forceDrainAfterMs, forceDrainDurationMs);
+  };
+
+  auto startMission = [&](const MissionCommand &cmd) {
+    missionStartMs = now;
+    drainStartMs = 0;
+    lastLogMs = 0;
+    lastUploadMs = 0;
+    sampleCount = 0;
+    uploadIndex = 0;
+    warnedHistoryFull = false;
+    targetDepthM = cmd.targetDepthM;
+    activeParams = cmd.params;
+    activeForceDrainAfterMs = cmd.forceDrainAfterMs;
+    activeForceDrainDurationMs = cmd.forceDrainDurationMs;
+
+    control.setParams(activeParams);
+    control.setEnabled(true);
+    control.setTargetDepth(targetDepthM);
+    control.reset(depth, now);
+
+    pump.stop();
+
+    logHistorySample(true);
+    publishMissionStatus(mqtt, "started", 0, depth, targetDepthM, activeParams,
+                         sampleCount, 0, activeForceDrainAfterMs,
+                         activeForceDrainDurationMs);
+
+    String msg = "depth mission start, target_depth_m=";
+    msg += String(targetDepthM, 3);
+    msg += ", kp=";
+    msg += String(activeParams.kp, 3);
+    msg += ", kd=";
+    msg += String(activeParams.kd, 3);
+    msg += ", force_drain_after_ms=";
+    msg += String(activeForceDrainAfterMs);
+    msg += ", force_drain_duration_ms=";
+    msg += String(activeForceDrainDurationMs);
+    msg += ", cmd_topic=";
+    msg += MQTT_TOPIC_CMD_MISSION;
+    debugInfo(msg);
+    phase = CONTROL_TO_DEPTH;
+  };
+
+  auto forceDrain = [&](const String &reason) {
+    control.setEnabled(false);
+    drainStartMs = now;
+    pump.setCommand(-1.0f);
+    pump.update();
+    logHistorySample(true);
+    publishMissionStatus(mqtt, "ascending", missionElapsedMs(), depth,
+                         targetDepthM, activeParams, sampleCount, uploadIndex,
+                         activeForceDrainAfterMs,
+                         activeForceDrainDurationMs);
+    debugWarn(reason);
+    phase = FORCE_DRAIN;
+  };
+
+  auto handlePendingCommand = [&]() {
+    if (!mqtt.hasNewCommand(MQTT_TOPIC_CMD_MISSION))
+    {
+      return;
+    }
+
+    String rawCmd = mqtt.latestCommand(MQTT_TOPIC_CMD_MISSION);
+    mqtt.clearCommand(MQTT_TOPIC_CMD_MISSION);
+
+    MissionCommand cmd =
+        parseMissionCommand(rawCmd, forceDrainAfterMs, forceDrainDurationMs);
+    switch (cmd.type)
+    {
+    case MissionCommand::NONE:
+      return;
+
+    case MissionCommand::STATUS:
+    {
+      publishReadyStatus(true);
+      String msg = "current depth_m=";
+      msg += String(depth, 3);
+      msg += ", status_topic=";
+      msg += MQTT_TOPIC_STATUS;
+      debugInfo(msg);
+      return;
+    }
+
+    case MissionCommand::START:
+      startMission(cmd);
+      return;
+
+    case MissionCommand::SURFACE:
+      debugWarn("surface cmd ignored: mission not started");
+      return;
+
+    case MissionCommand::INVALID:
+      debugError(
+          "invalid mission cmd, use start:<depth_m>,drain_after_ms=<ms>,drain_duration_ms=<ms> or {\"target_depth_m\":<depth_m>}");
+      return;
+    }
+  };
+
+  switch (phase)
+  {
+  case WAIT_START_CMD:
+    pump.setCommand(0.0f);
+    pump.update();
+    control.setEnabled(false);
+
+    if (!readyAnnounced)
+    {
+      readyAnnounced = true;
+      publishReadyStatus(true);
+
+      String msg = "depth mission ready, current_depth_m=";
+      msg += String(depth, 3);
+      msg += ", wait cmd on ";
+      msg += MQTT_TOPIC_CMD_MISSION;
+      debugInfo(msg);
+    }
+
+    publishReadyStatus(false);
+    handlePendingCommand();
+    break;
+
+  case CONTROL_TO_DEPTH:
+    logHistorySample(false);
+
+    control.apply(pump, depth, now);
+    pump.update();
+
+    if (now - missionStartMs >= activeForceDrainAfterMs)
+    {
+      String msg = "depth mission: force drain after ";
+      msg += String(activeForceDrainAfterMs);
+      msg += " ms, duration_ms=";
+      msg += String(activeForceDrainDurationMs);
+      forceDrain(msg);
+    }
+    break;
+
+  case FORCE_DRAIN:
+    logHistorySample(false);
+
+    pump.setCommand(-1.0f);
+    pump.update();
+
+    if (now - drainStartMs >= activeForceDrainDurationMs)
+    {
+      pump.stop();
+      logHistorySample(true);
+      publishMissionStatus(mqtt, "surfaced", missionElapsedMs(), depth,
+                           targetDepthM, activeParams, sampleCount, 0,
+                           activeForceDrainAfterMs,
+                           activeForceDrainDurationMs);
+      debugInfo("depth mission: force drain complete, preparing history upload");
+      phase = WAIT_UPLOAD_LINK;
+    }
+    break;
+
+  case WAIT_UPLOAD_LINK:
+    pump.setCommand(0.0f);
+    pump.update();
+
+    if (!mqtt.isMqttConnected())
+    {
+      return;
+    }
+
+    lastUploadMs = now;
+    uploadIndex = 0;
+    publishMissionStatus(mqtt, "uploading", missionElapsedMs(), depth,
+                         targetDepthM, activeParams, sampleCount, uploadIndex,
+                         activeForceDrainAfterMs,
+                         activeForceDrainDurationMs);
+    debugInfo("depth mission: MQTT ready, upload history begin");
+    phase = UPLOADING_HISTORY;
+    break;
+
+  case UPLOADING_HISTORY:
+    if (!mqtt.isMqttConnected())
+    {
+      phase = WAIT_UPLOAD_LINK;
+      debugWarn("depth mission: MQTT lost during upload, waiting to resume");
+      return;
+    }
+
+    if (uploadIndex >= sampleCount)
+    {
+      publishMissionStatus(mqtt, "complete", missionElapsedMs(), depth,
+                           targetDepthM, activeParams, sampleCount, uploadIndex,
+                           activeForceDrainAfterMs,
+                           activeForceDrainDurationMs);
+      debugInfo("depth mission: history upload complete");
+      phase = WAIT_START_CMD;
+      missionStartMs = 0;
+      lastReadyStatusMs = 0;
+      readyAnnounced = false;
+      activeForceDrainAfterMs = forceDrainAfterMs;
+      activeForceDrainDurationMs = forceDrainDurationMs;
+      activeParams = defaultControlParams();
+      return;
+    }
+
+    if (now - lastUploadMs < kDebugUploadIntervalMs)
+    {
+      return;
+    }
+
+    if (!mqtt.publishDepthSample((unsigned long)uploadIndex,
+                                 history[uploadIndex].timeMs,
+                                 history[uploadIndex].depthM))
+    {
+      return;
+    }
+
+    lastUploadMs = now;
+    uploadIndex++;
+    break;
+  }
+}
+
 void debugSensor(SensorDriver &sensor)
 {
-  unsigned long currentMillis = millis();
+  static unsigned long lastPrintMs = 0;
+  const unsigned long printIntervalMs = 500;
+
+  unsigned long now = millis();
 
   // 1. 更新感知
   sensor.update();
+
+  if (now - lastPrintMs < printIntervalMs)
+  {
+    return;
+  }
+  lastPrintMs = now;
 
   // 2. 读取数据
   float depth = sensor.getDepth();
@@ -218,7 +976,7 @@ void debugSensor(SensorDriver &sensor)
   msg.reserve(96);
 
   msg += "[Time: ";
-  msg += String(currentMillis / 1000.0, 2);
+  msg += String(now / 1000.0, 2);
   msg += "s] ";
 
   msg += "Depth: ";
@@ -236,48 +994,32 @@ void debugSensor(SensorDriver &sensor)
   debugInfo(msg);
 }
 
-void debugPump(Pump &pump)
+void debugPumpRemote(MqttLink &mqtt, Pump &pump)
 {
-  static unsigned long lastStepMs = 0;
+  static bool pumpRunning = false;
+  static bool volumeLimitEnabled = true;
+  static float currentThrust = 0.0f;
+  static unsigned long stopAtMs = 0;
   static unsigned long lastPrintMs = 0;
-  static int step = 0;
-  static bool entered = false;
-
-  const unsigned long stepIntervalMs = 5000; // 每阶段持续 5 秒
   const unsigned long printIntervalMs = 500; // 每 0.5 秒打印一次
+
+  mqtt.update();
 
   unsigned long now = millis();
 
-  if (!entered)
+  if (pumpRunning && (long)(now - stopAtMs) >= 0)
   {
-    entered = true;
-    lastStepMs = now;
-    // 暂时规避死区
-    switch (step)
-    {
-    case 0:
-      pump.setCommand(0.84f);
-      debugInfo("pump cmd=0.84");
-      break;
-    case 1:
-      pump.setCommand(-0.76f);
-      debugInfo("pump cmd=-0.76");
-      break;
-    case 2:
-      pump.setCommand(1.0f);
-      debugInfo("pump cmd=1.0");
-      break;
-    case 3:
-      pump.setCommand(-1.0f);
-      debugInfo("pump cmd=-1.0");
-      break;
-    default:
-      pump.setCommand(0.0f);
-      debugInfo("pump cmd=0.0");
-      break;
-    }
+    pumpRunning = false;
+    currentThrust = 0.0f;
+
+    String msg = "pump stop timeout";
+    msg += ", volume_limit=";
+    msg += String(volumeLimitEnabled ? 1 : 0);
+    debugInfo(msg);
   }
 
+  pump.setVolumeLimitEnabled(volumeLimitEnabled);
+  pump.setCommand(pumpRunning ? currentThrust : 0.0f);
   pump.update();
 
   if (now - lastPrintMs >= printIntervalMs)
@@ -292,68 +1034,67 @@ void debugPump(Pump &pump)
     msg += String(pump.isAtUpperLimit() ? 1 : 0);
     msg += ", lower=";
     msg += String(pump.isAtLowerLimit() ? 1 : 0);
+    msg += ", running=";
+    msg += String(pumpRunning ? 1 : 0);
+    msg += ", thrust=";
+    msg += String(currentThrust, 3);
+    msg += ", volume_limit=";
+    msg += String(volumeLimitEnabled ? 1 : 0);
 
     debugInfo(msg);
   }
 
-  if (now - lastStepMs >= stepIntervalMs)
+  if (!mqtt.hasNewCommand(MQTT_TOPIC_CMD_PUMP))
   {
-    step = (step + 1) % 4;
-    entered = false;
-  }
-}
-
-void debugPumpStartThreshold(MotorDriver &motor)
-{
-  static const float testCmds[] = {
-      0.7f,
-      -0.7f,
-      0.75f,
-      -0.75f,
-      0.8f,
-      -0.8f,
-      0.9f,
-      -0.9f,
-      1.0f,
-      -1.0f,
-  };
-
-  static const int kNumCmds = sizeof(testCmds) / sizeof(testCmds[0]);
-
-  static int index = 0;
-  static bool entered = false;
-  static unsigned long stepStartMs = 0;
-
-  const unsigned long driveMs = 1500; // 每个命令持续 1.5s
-  const unsigned long stopMs = 1000;  // 两步之间停 1.0s
-
-  unsigned long now = millis();
-  unsigned long phaseMs = driveMs + stopMs;
-  unsigned long elapsed = now - stepStartMs;
-
-  if (!entered)
-  {
-    entered = true;
-    stepStartMs = now;
-    elapsed = 0;
-
-    String msg = "start threshold test cmd=";
-    msg += String(testCmds[index], 2);
-    debugInfo(msg);
-
-    motor.setThrust(testCmds[index]);
+    return;
   }
 
-  // 驱动阶段结束后，进入 stop 阶段
-  if (elapsed >= driveMs && elapsed < phaseMs)
+  String cmd = mqtt.latestCommand(MQTT_TOPIC_CMD_PUMP);
+  mqtt.clearCommand(MQTT_TOPIC_CMD_PUMP);
+  cmd.trim();
+
+  if (cmd.equalsIgnoreCase("stop") || cmd.equalsIgnoreCase("pump stop") ||
+      cmd.equalsIgnoreCase("pump_stop"))
   {
-    motor.stop();
+    pumpRunning = false;
+    currentThrust = 0.0f;
+    pump.setCommand(0.0f);
+    pump.update();
+    debugWarn("pump stop by remote cmd");
+    return;
   }
 
-  // 当前测试项结束，切换到下一项
-  if (elapsed >= phaseMs)
+  float thrust = 0.0f;
+  unsigned long durationMs = 0;
+  bool hasVolumeLimit = false;
+  bool requestedVolumeLimit = volumeLimitEnabled;
+
+  if (!parsePumpRemoteCommand(cmd, thrust, durationMs, hasVolumeLimit,
+                              requestedVolumeLimit))
   {
-    index = (index + 1) % kNumCmds;
-    entered = false;
+    debugError(
+        "invalid pump cmd, use: pump:<thrust>,<duration_ms>,limit=<0|1> or stop");
+    return;
   }
+
+  if (hasVolumeLimit)
+  {
+    volumeLimitEnabled = requestedVolumeLimit;
+  }
+
+  pump.setVolumeLimitEnabled(volumeLimitEnabled);
+  pump.setCommand(thrust);
+  pump.update();
+
+  pumpRunning = true;
+  currentThrust = thrust;
+  stopAtMs = now + durationMs;
+
+  String msg = "pump start thrust=";
+  msg += String(thrust, 3);
+  msg += ", duration_ms=";
+  msg += String(durationMs);
+  msg += ", volume_limit=";
+  msg += String(volumeLimitEnabled ? 1 : 0);
+  debugInfo(msg);
 }
