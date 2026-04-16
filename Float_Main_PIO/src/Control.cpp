@@ -4,18 +4,18 @@
 
 namespace
 {
-float signOrZero(float value)
-{
-  if (value > 0.0f)
+  float signOrZero(float value)
   {
-    return 1.0f;
+    if (value > 0.0f)
+    {
+      return 1.0f;
+    }
+    if (value < 0.0f)
+    {
+      return -1.0f;
+    }
+    return 0.0f;
   }
-  if (value < 0.0f)
-  {
-    return -1.0f;
-  }
-  return 0.0f;
-}
 }
 
 Control::Control() : Control(Params{}) {}
@@ -23,7 +23,9 @@ Control::Control() : Control(Params{}) {}
 Control::Control(const Params &params)
     : params_(params), targetDepthM_(0.0f), lastDepthM_(0.0f),
       filteredDepthRateMps_(0.0f), lastCommand_(0.0f), lastError_(0.0f),
-      lastUpdateMs_(0), initialized_(false), enabled_(true), holding_(false)
+      lastLeadInput_(0.0f), lastLeadOutput_(0.0f), lastUpdateMs_(0),
+      initialized_(false), enabled_(true), holding_(false),
+      leadInitialized_(false)
 {
   sanitizeParams();
 }
@@ -42,6 +44,7 @@ void Control::reset(float currentDepthM, unsigned long nowMs)
   lastUpdateMs_ = nowMs;
   initialized_ = true;
   holding_ = fabs(lastError_) <= params_.holdEnterBandM;
+  resetLeadCompensator();
 }
 
 void Control::setParams(const Params &params)
@@ -65,6 +68,7 @@ void Control::setEnabled(bool enabled)
   if (!enabled_)
   {
     lastCommand_ = 0.0f;
+    resetLeadCompensator();
   }
 }
 
@@ -115,10 +119,13 @@ float Control::update(float currentDepthM, unsigned long nowMs)
   if (!enabled_ || holding_)
   {
     lastCommand_ = 0.0f;
+    resetLeadCompensator();
     return lastCommand_;
   }
 
-  float rawCommand = params_.kp * lastError_ - params_.kd * filteredDepthRateMps_;
+  float rawCommand =
+      params_.kp * lastError_ - params_.kd * filteredDepthRateMps_;
+  rawCommand = leadCompensator(rawCommand, dtS);
   rawCommand = constrain(rawCommand, -params_.outputLimit, params_.outputLimit);
 
   if (params_.minActuationCmd > 0.0f && fabs(rawCommand) < params_.minActuationCmd)
@@ -162,4 +169,55 @@ void Control::sanitizeParams()
   params_.holdExitBandM = max(params_.holdEnterBandM, params_.holdExitBandM);
   params_.derivativeFilterAlpha =
       constrain(params_.derivativeFilterAlpha, 0.0f, 1.0f);
+  params_.leadGain = max(0.0f, params_.leadGain);
+  params_.leadTauS = max(0.0f, params_.leadTauS);
+  params_.leadAlpha = constrain(params_.leadAlpha, 0.0f, 1.0f);
+}
+
+void Control::resetLeadCompensator()
+{
+  lastLeadInput_ = 0.0f;
+  lastLeadOutput_ = 0.0f;
+  leadInitialized_ = false;
+}
+
+float Control::leadCompensator(float input, float dtS)
+{
+  if (!params_.leadEnabled || params_.leadGain <= 0.0f ||
+      params_.leadTauS <= 0.0f || params_.leadAlpha <= 0.0f)
+  {
+    lastLeadInput_ = input;
+    lastLeadOutput_ = input;
+    leadInitialized_ = true;
+    return input;
+  }
+
+  if (!leadInitialized_ || dtS <= 0.0f)
+  {
+    lastLeadInput_ = input;
+    lastLeadOutput_ = params_.leadGain * input;
+    leadInitialized_ = true;
+    return lastLeadOutput_;
+  }
+
+  float denom = 2.0f * params_.leadAlpha * params_.leadTauS + dtS;
+  if (denom <= 0.0f)
+  {
+    lastLeadInput_ = input;
+    lastLeadOutput_ = params_.leadGain * input;
+    return lastLeadOutput_;
+  }
+
+  float b0 =
+      params_.leadGain * (2.0f * params_.leadTauS + dtS) / denom;
+  float b1 =
+      params_.leadGain * (dtS - 2.0f * params_.leadTauS) / denom;
+  float a1 = (dtS - 2.0f * params_.leadAlpha * params_.leadTauS) / denom;
+
+  float output =
+      b0 * input + b1 * lastLeadInput_ - a1 * lastLeadOutput_;
+
+  lastLeadInput_ = input;
+  lastLeadOutput_ = output;
+  return output;
 }

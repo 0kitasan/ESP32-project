@@ -18,6 +18,10 @@ public:
     float holdEnterBandM = CTRL_HOLD_ENTER_BAND_M_DEFAULT;
     float holdExitBandM = CTRL_HOLD_EXIT_BAND_M_DEFAULT;
     float derivativeFilterAlpha = CTRL_DERIVATIVE_FILTER_ALPHA_DEFAULT;
+    bool leadEnabled = CTRL_LEAD_ENABLE_DEFAULT != 0;
+    float leadGain = CTRL_LEAD_GAIN_DEFAULT;
+    float leadTauS = CTRL_LEAD_TAU_S_DEFAULT;
+    float leadAlpha = CTRL_LEAD_ALPHA_DEFAULT;
   };
 
   Control();
@@ -52,12 +56,17 @@ private:
   float filteredDepthRateMps_;
   float lastCommand_;
   float lastError_;
+  float lastLeadInput_;
+  float lastLeadOutput_;
   unsigned long lastUpdateMs_;
   bool initialized_;
   bool enabled_;
   bool holding_;
+  bool leadInitialized_;
 
   void sanitizeParams();
+  void resetLeadCompensator();
+  float leadCompensator(float input, float dtS);
 };
 
 #endif

@@ -20,7 +20,7 @@ void FloatManager::init()
 void FloatManager::update()
 {
   unsigned long now = millis();
-  float currentDepth = sensor->getDepth();
+  float currentDepth = sensor->getDepthFilter();
 
   switch (currentState)
   {

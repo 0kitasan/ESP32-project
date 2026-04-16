@@ -47,6 +47,10 @@ namespace
     params.holdEnterBandM = CTRL_HOLD_ENTER_BAND_M_DEFAULT;
     params.holdExitBandM = CTRL_HOLD_EXIT_BAND_M_DEFAULT;
     params.derivativeFilterAlpha = CTRL_DERIVATIVE_FILTER_ALPHA_DEFAULT;
+    params.leadEnabled = CTRL_LEAD_ENABLE_DEFAULT != 0;
+    params.leadGain = CTRL_LEAD_GAIN_DEFAULT;
+    params.leadTauS = CTRL_LEAD_TAU_S_DEFAULT;
+    params.leadAlpha = CTRL_LEAD_ALPHA_DEFAULT;
     return params;
   }
 
@@ -225,8 +229,30 @@ namespace
 
   bool extractAssignedBool(const String &text, const char *key, bool &value)
   {
+    String pattern = String(key) + "=";
+    int pos = text.indexOf(pattern);
+    if (pos < 0)
+    {
+      return false;
+    }
+
+    String tail = text.substring(pos + pattern.length());
+    tail.trim();
+
+    if (tail.startsWith("true"))
+    {
+      value = true;
+      return true;
+    }
+
+    if (tail.startsWith("false"))
+    {
+      value = false;
+      return true;
+    }
+
     float parsed = 0.0f;
-    if (!extractAssignedFloat(text, key, parsed))
+    if (!parseLeadingFloat(tail, parsed))
     {
       return false;
     }
@@ -281,6 +307,45 @@ namespace
     String tail = text.substring(pos + pattern.length());
     tail.trim();
     return parseLeadingUnsignedLong(tail, value);
+  }
+
+  bool extractJsonBool(const String &text, const char *key, bool &value)
+  {
+    int keyPos = text.indexOf(key);
+    if (keyPos < 0)
+    {
+      return false;
+    }
+
+    int colonPos = text.indexOf(':', keyPos);
+    if (colonPos < 0)
+    {
+      return false;
+    }
+
+    String tail = text.substring(colonPos + 1);
+    tail.trim();
+
+    if (tail.startsWith("true"))
+    {
+      value = true;
+      return true;
+    }
+
+    if (tail.startsWith("false"))
+    {
+      value = false;
+      return true;
+    }
+
+    float parsed = 0.0f;
+    if (!parseLeadingFloat(tail, parsed))
+    {
+      return false;
+    }
+
+    value = parsed != 0.0f;
+    return true;
   }
 
   bool parsePumpRemoteCommand(const String &rawCmd, float &thrust,
@@ -375,6 +440,10 @@ namespace
     {
       extractJsonFloat(lower, "kp", result.params.kp);
       extractJsonFloat(lower, "kd", result.params.kd);
+      extractJsonBool(lower, "lead_enable", result.params.leadEnabled);
+      extractJsonFloat(lower, "lead_gain", result.params.leadGain);
+      extractJsonFloat(lower, "lead_tau_s", result.params.leadTauS);
+      extractJsonFloat(lower, "lead_alpha", result.params.leadAlpha);
       extractJsonUnsignedLong(lower, "force_drain_after_ms",
                               result.forceDrainAfterMs);
       extractJsonUnsignedLong(lower, "drain_after_ms",
@@ -393,6 +462,10 @@ namespace
     {
       extractAssignedFloat(lower, "kp", result.params.kp);
       extractAssignedFloat(lower, "kd", result.params.kd);
+      extractAssignedBool(lower, "lead_enable", result.params.leadEnabled);
+      extractAssignedFloat(lower, "lead_gain", result.params.leadGain);
+      extractAssignedFloat(lower, "lead_tau_s", result.params.leadTauS);
+      extractAssignedFloat(lower, "lead_alpha", result.params.leadAlpha);
       extractAssignedUnsignedLong(lower, "force_drain_after_ms",
                                   result.forceDrainAfterMs);
       extractAssignedUnsignedLong(lower, "drain_after_ms",
@@ -426,7 +499,7 @@ namespace
                             unsigned long forceDrainDurationMs)
   {
     String payload;
-    payload.reserve(300);
+    payload.reserve(380);
     payload += "{\"state\":\"";
     payload += state;
     payload += "\",\"time_ms\":";
@@ -439,6 +512,14 @@ namespace
     payload += String(params.kp, 3);
     payload += ",\"kd\":";
     payload += String(params.kd, 3);
+    payload += ",\"lead_enable\":";
+    payload += String(params.leadEnabled ? 1 : 0);
+    payload += ",\"lead_gain\":";
+    payload += String(params.leadGain, 3);
+    payload += ",\"lead_tau_s\":";
+    payload += String(params.leadTauS, 3);
+    payload += ",\"lead_alpha\":";
+    payload += String(params.leadAlpha, 3);
     payload += ",\"force_drain_after_ms\":";
     payload += String(forceDrainAfterMs);
     payload += ",\"force_drain_duration_ms\":";
@@ -689,13 +770,15 @@ void debugDepthMission(MqttLink &mqtt, SensorDriver &sensor, Pump &pump,
   sensor.update();
 
   unsigned long now = millis();
-  float depth = sensor.getDepth();
+  float depth = sensor.getDepthFilter();
 
-  auto missionElapsedMs = [&]() -> unsigned long {
+  auto missionElapsedMs = [&]() -> unsigned long
+  {
     return missionStartMs == 0 ? 0 : now - missionStartMs;
   };
 
-  auto logHistorySample = [&](bool force) {
+  auto logHistorySample = [&](bool force)
+  {
     if (!force && now - lastLogMs < kDebugHistoryLogIntervalMs)
     {
       return;
@@ -717,7 +800,8 @@ void debugDepthMission(MqttLink &mqtt, SensorDriver &sensor, Pump &pump,
     }
   };
 
-  auto publishReadyStatus = [&](bool force) {
+  auto publishReadyStatus = [&](bool force)
+  {
     if (!mqtt.isMqttConnected())
     {
       return;
@@ -733,7 +817,8 @@ void debugDepthMission(MqttLink &mqtt, SensorDriver &sensor, Pump &pump,
                          forceDrainAfterMs, forceDrainDurationMs);
   };
 
-  auto startMission = [&](const MissionCommand &cmd) {
+  auto startMission = [&](const MissionCommand &cmd)
+  {
     missionStartMs = now;
     drainStartMs = 0;
     lastLogMs = 0;
@@ -764,6 +849,14 @@ void debugDepthMission(MqttLink &mqtt, SensorDriver &sensor, Pump &pump,
     msg += String(activeParams.kp, 3);
     msg += ", kd=";
     msg += String(activeParams.kd, 3);
+    msg += ", lead_enable=";
+    msg += String(activeParams.leadEnabled ? 1 : 0);
+    msg += ", lead_gain=";
+    msg += String(activeParams.leadGain, 3);
+    msg += ", lead_tau_s=";
+    msg += String(activeParams.leadTauS, 3);
+    msg += ", lead_alpha=";
+    msg += String(activeParams.leadAlpha, 3);
     msg += ", force_drain_after_ms=";
     msg += String(activeForceDrainAfterMs);
     msg += ", force_drain_duration_ms=";
@@ -774,7 +867,8 @@ void debugDepthMission(MqttLink &mqtt, SensorDriver &sensor, Pump &pump,
     phase = CONTROL_TO_DEPTH;
   };
 
-  auto forceDrain = [&](const String &reason) {
+  auto forceDrain = [&](const String &reason)
+  {
     control.setEnabled(false);
     drainStartMs = now;
     pump.setCommand(-1.0f);
@@ -788,7 +882,8 @@ void debugDepthMission(MqttLink &mqtt, SensorDriver &sensor, Pump &pump,
     phase = FORCE_DRAIN;
   };
 
-  auto handlePendingCommand = [&]() {
+  auto handlePendingCommand = [&]()
+  {
     if (!mqtt.hasNewCommand(MQTT_TOPIC_CMD_MISSION))
     {
       return;
@@ -825,7 +920,7 @@ void debugDepthMission(MqttLink &mqtt, SensorDriver &sensor, Pump &pump,
 
     case MissionCommand::INVALID:
       debugError(
-          "invalid mission cmd, use start:<depth_m>,drain_after_ms=<ms>,drain_duration_ms=<ms> or {\"target_depth_m\":<depth_m>}");
+          "invalid mission cmd, use start:<depth_m>,kp=<v>,kd=<v>,lead_enable=<0|1>,lead_gain=<v>,lead_tau_s=<s>,lead_alpha=<v> or {\"target_depth_m\":<depth_m>}");
       return;
     }
   };

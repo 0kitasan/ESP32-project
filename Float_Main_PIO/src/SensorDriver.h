@@ -57,6 +57,7 @@ public:
 
         // 记录空气中的深度偏移量
         depthOffset = sum / samples;
+        resetDepthFilter();
 
         Serial.print("Done. Offset: ");
         Serial.print(depthOffset);
@@ -71,9 +72,10 @@ public:
         sensor.read();
 
         // 获取结果
-        currentDepth = sensor.depth() - depthOffset; // 单位: m (米)
-        currentPressure = sensor.pressure();         // 单位: mbar (毫巴)
-        currentTemp = sensor.temperature();          // 单位: C (摄氏度)
+        currentDepthRaw = sensor.depth() - depthOffset; // 单位: m (米)
+        currentPressure = sensor.pressure();            // 单位: mbar (毫巴)
+        currentTemp = sensor.temperature();             // 单位: C (摄氏度)
+        updateDepthFilter(currentDepthRaw);
 
         // 简单的调试打印 (不要在高速循环里一直开)
         // Serial.print("Depth: "); Serial.println(currentDepth);
@@ -81,7 +83,12 @@ public:
 
     float getDepth()
     {
-        return currentDepth;
+        return currentDepthRaw;
+    }
+
+    float getDepthFilter()
+    {
+        return currentDepthFiltered;
     }
 
     float getPressure()
@@ -95,11 +102,79 @@ public:
     }
 
 private:
+    static constexpr size_t kDepthMedianWindowSize = 5;
+    static constexpr float kDepthEmaAlpha = 0.35f;
+
     MS5837 sensor; // 实例化库对象
     float depthOffset = 0.0;
-    float currentDepth = 0.0;
+    float currentDepthRaw = 0.0;
+    float currentDepthFiltered = 0.0;
     float currentPressure = 0.0;
     float currentTemp = 0.0;
+    float depthWindow[kDepthMedianWindowSize] = {0.0f};
+    size_t depthWindowCount = 0;
+    size_t depthWindowIndex = 0;
+    bool depthFilterReady = false;
+
+    void resetDepthFilter()
+    {
+        currentDepthRaw = 0.0f;
+        currentDepthFiltered = 0.0f;
+        depthWindowCount = 0;
+        depthWindowIndex = 0;
+        depthFilterReady = false;
+
+        for (size_t i = 0; i < kDepthMedianWindowSize; ++i)
+        {
+            depthWindow[i] = 0.0f;
+        }
+    }
+
+    void updateDepthFilter(float rawDepth)
+    {
+        depthWindow[depthWindowIndex] = rawDepth;
+        depthWindowIndex = (depthWindowIndex + 1) % kDepthMedianWindowSize;
+
+        if (depthWindowCount < kDepthMedianWindowSize)
+        {
+            depthWindowCount++;
+        }
+
+        float sortedWindow[kDepthMedianWindowSize];
+        for (size_t i = 0; i < depthWindowCount; ++i)
+        {
+            sortedWindow[i] = depthWindow[i];
+        }
+
+        for (size_t i = 1; i < depthWindowCount; ++i)
+        {
+            float value = sortedWindow[i];
+            size_t j = i;
+            while (j > 0 && sortedWindow[j - 1] > value)
+            {
+                sortedWindow[j] = sortedWindow[j - 1];
+                j--;
+            }
+            sortedWindow[j] = value;
+        }
+
+        size_t mid = depthWindowCount / 2;
+        float medianDepth = sortedWindow[mid];
+        if ((depthWindowCount % 2) == 0)
+        {
+            medianDepth = 0.5f * (sortedWindow[mid - 1] + sortedWindow[mid]);
+        }
+
+        if (!depthFilterReady)
+        {
+            currentDepthFiltered = medianDepth;
+            depthFilterReady = true;
+            return;
+        }
+
+        currentDepthFiltered +=
+            kDepthEmaAlpha * (medianDepth - currentDepthFiltered);
+    }
 };
 
 #endif

@@ -54,7 +54,7 @@ void setup()
   debugInfo("mission force drain defaults: after_ms=" +
             String(kMissionForceDrainAfterMs) + ", duration_ms=" +
             String(kMissionForceDrainDurationMs));
-  debugInfo("mission cmd format: start:<depth_m>,drain_after_ms=<ms>,drain_duration_ms=<ms> or {\"target_depth_m\":<depth_m>}");
+  debugInfo("mission cmd format: start:<depth_m>,kp=<v>,kd=<v>,lead_enable=<0|1>,lead_gain=<v>,lead_tau_s=<s>,lead_alpha=<v>,drain_after_ms=<ms>,drain_duration_ms=<ms> or {\"target_depth_m\":<depth_m>}");
   debugInfo("history sample format: {\"idx\":n,\"time_ms\":t,\"depth_m\":d}");
   debugInfo("mission volume limit: " + String(kMissionEnableVolumeLimit ? "on" : "off"));
   debugInfo("status topic reports current depth before dive");
