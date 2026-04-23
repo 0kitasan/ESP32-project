@@ -41,13 +41,14 @@
 // 通信参数
 
 // WiFi 参数
-#define WIFI_SSID           "FINS"  //esp32_sjtu
-#define WIFI_PASSWORD       "fins1896"  //esp32_sjtu
-// #define WIFI_SSID           "esp32_sjtu"
-// #define WIFI_PASSWORD       "esp32_sjtu"
+// #define WIFI_SSID           "FINS"
+// #define WIFI_PASSWORD       "fins1896"
+#define WIFI_SSID           "esp32_sjtu"
+#define WIFI_PASSWORD       "esp32_sjtu"
 
 // MQTT 参数
-#define MQTT_HOST           "192.168.8.76"//"192.168.137.1"
+// #define MQTT_HOST           "192.168.8.76"
+#define MQTT_HOST           "192.168.137.1"
 #define MQTT_PORT           1883
 #define MQTT_USER           ""//"admin"
 #define MQTT_PASSWORD       ""//"Ciallo~114"
@@ -60,9 +61,10 @@
 #define MQTT_TOPIC_COUNTER  MQTT_TOPIC_PREFIX "/counter"
 #define MQTT_TOPIC_DEBUG    MQTT_TOPIC_PREFIX "/debug"
 #define MQTT_TOPIC_HISTORY  MQTT_TOPIC_PREFIX "/history"
+#define MQTT_TOPIC_PARAM    MQTT_TOPIC_PREFIX "/param"
 #define MQTT_TOPIC_REALTIME MQTT_TOPIC_PREFIX "/telemetry"
 #define MQTT_TOPIC_STATUS   MQTT_TOPIC_PREFIX "/status"
 
-#define MQTT_CLIENT_ID      "float-sjtu-mqtt"
+#define MQTT_CLIENT_ID      "esp32_float_sjtu_mqtt"
 
 #endif

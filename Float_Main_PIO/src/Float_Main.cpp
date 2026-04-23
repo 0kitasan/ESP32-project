@@ -27,6 +27,8 @@ StorageDriver myStorage;
 // 2. 实例化管理器，并将驱动传给它
 FloatManager myManager(&mySensor, &myMotor, &myMqtt, &myStorage);
 
+volatile bool otaInProgress = false;
+
 void setup()
 {
   Serial.begin(115200);
@@ -50,32 +52,55 @@ void setup()
   debugInfo("counter cmd topic: " MQTT_TOPIC_CMD_COUNTER);
   debugInfo("motor cmd format: <speed>,<duration_ms> or stop");
   debugInfo("mission status topic: " MQTT_TOPIC_STATUS);
+  debugInfo("mission param topic: " MQTT_TOPIC_PARAM);
   debugInfo("pump sign convention: +fill/down, -drain/up");
   debugInfo("mission force drain defaults: after_ms=" +
             String(kMissionForceDrainAfterMs) + ", duration_ms=" +
             String(kMissionForceDrainDurationMs));
   debugInfo("mission cmd format: start:<depth_m>,kp=<v>,kd=<v>,lead_enable=<0|1>,lead_gain=<v>,lead_tau_s=<s>,lead_alpha=<v>,drain_after_ms=<ms>,drain_duration_ms=<ms> or {\"target_depth_m\":<depth_m>}");
-  debugInfo("history sample format: {\"idx\":n,\"time_ms\":t,\"depth_m\":d}");
+  debugInfo("history sample format: {\"idx\":n,\"time_ms\":t,\"depth_m\":d,\"control_output\":u}");
   debugInfo("mission volume limit: " + String(kMissionEnableVolumeLimit ? "on" : "off"));
   debugInfo("status topic reports current depth before dive");
   debugWarn("example: wifi reconnecting");
   debugError("example: sensor init failed");
+  //打印 ip 地址
+  if (WiFi.status() == WL_CONNECTED)
+  {
+    debugInfo("wifi ip: " + WiFi.localIP().toString());
+  }
+  else
+  {
+    debugWarn("wifi ip unavailable: WiFi not connected");
+  }
+  // OTA 回调
+  ArduinoOTA
+  .onStart([]() {
+    otaInProgress = true;
+  })
+  .onEnd([]() {
+    otaInProgress = false;
+  })
+  .onError([](ota_error_t error) {
+    otaInProgress = false;
+  });
+
   ArduinoOTA.begin();
 }
 
 void loop()
 {
-  // 命令 topic 已拆分，但共享同一执行器的测试入口仍不应同时启用。
-  debugDepthMission(myMqtt, mySensor, myPump, myControl,
-                    kMissionEnableVolumeLimit,
-                    kMissionForceDrainAfterMs,
-                    kMissionForceDrainDurationMs);
-  // debugFakeHistoryUpload(myMqtt);
-  // debugMotorRemote(myMqtt, myMotor);
-  // debugSensor(mySensor);
-  // debugPumpRemote(myMqtt, myPump);
-
-  // 4. 控制频率 (简单的延时，或者用 millis 控制固定周期)
-  delay(10);
   ArduinoOTA.handle();
+  delay(2);
+
+  if (!otaInProgress){
+    // 命令 topic 已拆分，但共享同一执行器的测试入口仍不应同时启用。
+    debugDepthMission(myMqtt, mySensor, myPump, myControl,
+                      kMissionEnableVolumeLimit,
+                      kMissionForceDrainAfterMs,
+                      kMissionForceDrainDurationMs);
+    // debugFakeHistoryUpload(myMqtt);
+    // debugMotorRemote(myMqtt, myMotor);
+    // debugSensor(mySensor);
+    // debugPumpRemote(myMqtt, myPump);
+  }
 }

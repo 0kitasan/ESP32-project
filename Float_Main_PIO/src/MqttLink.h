@@ -26,7 +26,8 @@ public:
   // 消息封装
   bool publishRaw(const char *topic, const char *payload); // 通用接口
   bool publishCounter(unsigned long value);                // 测试用，不过可能后面有用就留着
-  bool publishDepthSample(unsigned long idx, unsigned long timeMs, float depthM);
+  bool publishDepthSample(unsigned long idx, unsigned long timeMs, float depthM,
+                          float controlOutput);
   void sendRealtimeData(float depth);
   void sendHistoryLine(const String &line);
 

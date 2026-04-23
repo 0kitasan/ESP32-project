@@ -125,16 +125,18 @@ bool MqttLink::publishCounter(unsigned long value)
 }
 
 bool MqttLink::publishDepthSample(unsigned long idx, unsigned long timeMs,
-                                  float depthM)
+                                  float depthM, float controlOutput)
 {
   String payload;
-  payload.reserve(80);
+  payload.reserve(112);
   payload += "{\"idx\":";
   payload += String(idx);
   payload += ",\"time_ms\":";
   payload += String(timeMs);
   payload += ",\"depth_m\":";
   payload += String(depthM, 3);
+  payload += ",\"control_output\":";
+  payload += String(controlOutput, 3);
   payload += "}";
 
   return publishRaw(MQTT_TOPIC_HISTORY, payload.c_str());

@@ -20,6 +20,15 @@ def pick_number(record, keys):
 
 
 def normalize_record(record):
+    # MQTTX 导出的数据通常是外层包一层 payload
+    if isinstance(record, dict) and "payload" in record:
+        payload = record["payload"]
+        if isinstance(payload, dict):
+            record = payload
+        elif isinstance(payload, str):
+            # 有些导出里 payload 可能还是 JSON 字符串
+            record = json.loads(payload)
+
     return {
         "idx": record.get("idx", record.get("index")),
         "time_ms": pick_number(record, TIME_KEYS),

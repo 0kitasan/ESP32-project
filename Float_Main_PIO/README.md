@@ -16,6 +16,7 @@
 - `MQTT_TOPIC_CMD_PUMP = /float_sjtu/cmd/pump`
 - `MQTT_TOPIC_CMD_COUNTER = /float_sjtu/cmd/counter`
 - `MQTT_TOPIC_STATUS = /float_sjtu/status`
+- `MQTT_TOPIC_PARAM = /float_sjtu/param`
 - `MQTT_TOPIC_HISTORY = /float_sjtu/history`
 - `MQTT_TOPIC_DEBUG = /float_sjtu/debug`
 - `MQTT_TOPIC_REALTIME = /float_sjtu/telemetry`
@@ -32,6 +33,8 @@
 `debugMQTT(...)` 计数测试命令。
 - `/float_sjtu/status`
 浮标状态信息。上电待命时会主动输出当前深度，方便确认深度零点是否正常。
+- `/float_sjtu/param`
+任务控制参数信息。任务开始时会单独发布当前使用的 `kp/kd/lead_*` 参数。
 - `/float_sjtu/history`
 浮标出水后回传的历史深度-时间数据。
 - `/float_sjtu/debug`
@@ -42,7 +45,7 @@
 当前几条主要调试入口如下：
 
 - `debugDepthMission(...)`
-使用 `/float_sjtu/cmd/mission` 接收任务命令，使用 `/float_sjtu/status` 回传状态，使用 `/float_sjtu/history` 回传历史数据。
+使用 `/float_sjtu/cmd/mission` 接收任务命令，使用 `/float_sjtu/status` 回传任务状态，使用 `/float_sjtu/param` 回传当前控制参数，使用 `/float_sjtu/history` 回传历史数据。
 - `debugMotorRemote(...)`
 使用 `/float_sjtu/cmd/motor` 接收电机推力命令，调试日志发到 `/float_sjtu/debug`。
 - `debugPumpRemote(...)`
@@ -118,6 +121,7 @@ G_lead(s) = K * (T s + 1) / (alpha T s + 1)
 
 - `time_ms`
 - `depth_m`
+- `control_output`
 
 当前缓冲区容量是 `256` 条。
 
@@ -283,6 +287,8 @@ pump:-0.90,2000,limit=0
   "time_ms": 0,
   "depth_m": 0.003,
   "target_depth_m": 0.000,
+  "force_drain_after_ms": 30000,
+  "force_drain_duration_ms": 10000,
   "history_count": 0,
   "upload_index": 0
 }
@@ -296,14 +302,23 @@ pump:-0.90,2000,limit=0
   "time_ms": 0,
   "depth_m": 0.012,
   "target_depth_m": 2.500,
+  "force_drain_after_ms": 30000,
+  "force_drain_duration_ms": 10000,
+  "history_count": 1,
+  "upload_index": 0
+}
+```
+
+任务启动时 `/float_sjtu/param` 会额外发送：
+
+```json
+{
   "kp": 1.100,
   "kd": 0.450,
   "lead_enable": 1,
   "lead_gain": 1.000,
   "lead_tau_s": 0.150,
-  "lead_alpha": 0.350,
-  "history_count": 1,
-  "upload_index": 0
+  "lead_alpha": 0.350
 }
 ```
 
@@ -315,6 +330,7 @@ pump:-0.90,2000,limit=0
 {
   "idx": 12,
   "time_ms": 6000,
-  "depth_m": 2.347
+  "depth_m": 2.347,
+  "control_output": 0.812
 }
 ```

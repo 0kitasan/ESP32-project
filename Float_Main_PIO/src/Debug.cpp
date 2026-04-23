@@ -17,6 +17,7 @@ namespace
   {
     unsigned long timeMs;
     float depthM;
+    float controlOutput;
   };
 
   struct MissionCommand
@@ -168,7 +169,7 @@ namespace
 
   bool appendDepthSample(DebugDepthSample *samples, size_t capacity,
                          size_t &sampleCount, unsigned long timeMs,
-                         float depthM)
+                         float depthM, float controlOutput)
   {
     if (sampleCount >= capacity)
     {
@@ -177,6 +178,7 @@ namespace
 
     samples[sampleCount].timeMs = timeMs;
     samples[sampleCount].depthM = depthM;
+    samples[sampleCount].controlOutput = controlOutput;
     sampleCount++;
     return true;
   }
@@ -493,8 +495,8 @@ namespace
 
   bool publishMissionStatus(MqttLink &mqtt, const char *state,
                             unsigned long missionTimeMs, float depthM,
-                            float targetDepthM, const Control::Params &params,
-                            size_t sampleCount, size_t uploadIndex,
+                            float targetDepthM, size_t sampleCount,
+                            size_t uploadIndex,
                             unsigned long forceDrainAfterMs,
                             unsigned long forceDrainDurationMs)
   {
@@ -508,18 +510,6 @@ namespace
     payload += String(depthM, 3);
     payload += ",\"target_depth_m\":";
     payload += String(targetDepthM, 3);
-    payload += ",\"kp\":";
-    payload += String(params.kp, 3);
-    payload += ",\"kd\":";
-    payload += String(params.kd, 3);
-    payload += ",\"lead_enable\":";
-    payload += String(params.leadEnabled ? 1 : 0);
-    payload += ",\"lead_gain\":";
-    payload += String(params.leadGain, 3);
-    payload += ",\"lead_tau_s\":";
-    payload += String(params.leadTauS, 3);
-    payload += ",\"lead_alpha\":";
-    payload += String(params.leadAlpha, 3);
     payload += ",\"force_drain_after_ms\":";
     payload += String(forceDrainAfterMs);
     payload += ",\"force_drain_duration_ms\":";
@@ -531,6 +521,27 @@ namespace
     payload += "}";
 
     return mqtt.publishRaw(MQTT_TOPIC_STATUS, payload.c_str());
+  }
+
+  bool publishMissionParams(MqttLink &mqtt, const Control::Params &params)
+  {
+    String payload;
+    payload.reserve(144);
+    payload += "{\"kp\":";
+    payload += String(params.kp, 3);
+    payload += ",\"kd\":";
+    payload += String(params.kd, 3);
+    payload += ",\"lead_enable\":";
+    payload += String(params.leadEnabled ? 1 : 0);
+    payload += ",\"lead_gain\":";
+    payload += String(params.leadGain, 3);
+    payload += ",\"lead_tau_s\":";
+    payload += String(params.leadTauS, 3);
+    payload += ",\"lead_alpha\":";
+    payload += String(params.leadAlpha, 3);
+    payload += "}";
+
+    return mqtt.publishRaw(MQTT_TOPIC_PARAM, payload.c_str());
   }
 }
 
@@ -713,7 +724,7 @@ void debugFakeHistoryUpload(MqttLink &mqtt)
   }
 
   float depth = fakeDepthAt(sampleTimeMs);
-  if (!mqtt.publishDepthSample(sampleIdx, sampleTimeMs, depth))
+  if (!mqtt.publishDepthSample(sampleIdx, sampleTimeMs, depth, 0.0f))
   {
     debugError("fake history upload publish failed");
     return;
@@ -777,7 +788,7 @@ void debugDepthMission(MqttLink &mqtt, SensorDriver &sensor, Pump &pump,
     return missionStartMs == 0 ? 0 : now - missionStartMs;
   };
 
-  auto logHistorySample = [&](bool force)
+  auto logHistorySample = [&](bool force, float controlOutput)
   {
     if (!force && now - lastLogMs < kDebugHistoryLogIntervalMs)
     {
@@ -788,7 +799,7 @@ void debugDepthMission(MqttLink &mqtt, SensorDriver &sensor, Pump &pump,
     lastLogMs = now;
 
     if (appendDepthSample(history, kDebugMaxHistorySamples, sampleCount, timeMs,
-                          depth))
+                          depth, controlOutput))
     {
       return;
     }
@@ -813,7 +824,7 @@ void debugDepthMission(MqttLink &mqtt, SensorDriver &sensor, Pump &pump,
     }
 
     lastReadyStatusMs = now;
-    publishMissionStatus(mqtt, "ready", 0, depth, 0.0f, activeParams, 0, 0,
+    publishMissionStatus(mqtt, "ready", 0, depth, 0.0f, 0, 0,
                          forceDrainAfterMs, forceDrainDurationMs);
   };
 
@@ -838,9 +849,10 @@ void debugDepthMission(MqttLink &mqtt, SensorDriver &sensor, Pump &pump,
 
     pump.stop();
 
-    logHistorySample(true);
-    publishMissionStatus(mqtt, "started", 0, depth, targetDepthM, activeParams,
-                         sampleCount, 0, activeForceDrainAfterMs,
+    logHistorySample(true, control.getLastCommand());
+    publishMissionParams(mqtt, activeParams);
+    publishMissionStatus(mqtt, "started", 0, depth, targetDepthM, sampleCount,
+                         0, activeForceDrainAfterMs,
                          activeForceDrainDurationMs);
 
     String msg = "depth mission start, target_depth_m=";
@@ -873,9 +885,9 @@ void debugDepthMission(MqttLink &mqtt, SensorDriver &sensor, Pump &pump,
     drainStartMs = now;
     pump.setCommand(-1.0f);
     pump.update();
-    logHistorySample(true);
+    logHistorySample(true, -1.0f);
     publishMissionStatus(mqtt, "ascending", missionElapsedMs(), depth,
-                         targetDepthM, activeParams, sampleCount, uploadIndex,
+                         targetDepthM, sampleCount, uploadIndex,
                          activeForceDrainAfterMs,
                          activeForceDrainDurationMs);
     debugWarn(reason);
@@ -949,10 +961,9 @@ void debugDepthMission(MqttLink &mqtt, SensorDriver &sensor, Pump &pump,
     break;
 
   case CONTROL_TO_DEPTH:
-    logHistorySample(false);
-
     control.apply(pump, depth, now);
     pump.update();
+    logHistorySample(false, control.getLastCommand());
 
     if (now - missionStartMs >= activeForceDrainAfterMs)
     {
@@ -965,17 +976,16 @@ void debugDepthMission(MqttLink &mqtt, SensorDriver &sensor, Pump &pump,
     break;
 
   case FORCE_DRAIN:
-    logHistorySample(false);
-
     pump.setCommand(-1.0f);
     pump.update();
+    logHistorySample(false, -1.0f);
 
     if (now - drainStartMs >= activeForceDrainDurationMs)
     {
       pump.stop();
-      logHistorySample(true);
+      logHistorySample(true, 0.0f);
       publishMissionStatus(mqtt, "surfaced", missionElapsedMs(), depth,
-                           targetDepthM, activeParams, sampleCount, 0,
+                           targetDepthM, sampleCount, 0,
                            activeForceDrainAfterMs,
                            activeForceDrainDurationMs);
       debugInfo("depth mission: force drain complete, preparing history upload");
@@ -995,7 +1005,7 @@ void debugDepthMission(MqttLink &mqtt, SensorDriver &sensor, Pump &pump,
     lastUploadMs = now;
     uploadIndex = 0;
     publishMissionStatus(mqtt, "uploading", missionElapsedMs(), depth,
-                         targetDepthM, activeParams, sampleCount, uploadIndex,
+                         targetDepthM, sampleCount, uploadIndex,
                          activeForceDrainAfterMs,
                          activeForceDrainDurationMs);
     debugInfo("depth mission: MQTT ready, upload history begin");
@@ -1013,7 +1023,7 @@ void debugDepthMission(MqttLink &mqtt, SensorDriver &sensor, Pump &pump,
     if (uploadIndex >= sampleCount)
     {
       publishMissionStatus(mqtt, "complete", missionElapsedMs(), depth,
-                           targetDepthM, activeParams, sampleCount, uploadIndex,
+                           targetDepthM, sampleCount, uploadIndex,
                            activeForceDrainAfterMs,
                            activeForceDrainDurationMs);
       debugInfo("depth mission: history upload complete");
@@ -1034,7 +1044,8 @@ void debugDepthMission(MqttLink &mqtt, SensorDriver &sensor, Pump &pump,
 
     if (!mqtt.publishDepthSample((unsigned long)uploadIndex,
                                  history[uploadIndex].timeMs,
-                                 history[uploadIndex].depthM))
+                                 history[uploadIndex].depthM,
+                                 history[uploadIndex].controlOutput))
     {
       return;
     }
