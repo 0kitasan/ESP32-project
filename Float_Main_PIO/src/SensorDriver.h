@@ -5,6 +5,7 @@
 #include <Wire.h>
 #include "MS5837.h"
 #include "Config.h"
+#include "DepthPostProcessor.h"
 
 class SensorDriver
 {
@@ -111,6 +112,7 @@ private:
     float currentDepthFiltered = 0.0;
     float currentPressure = 0.0;
     float currentTemp = 0.0;
+    DepthPostProcessor depthPostProcessor;
     float depthWindow[kDepthMedianWindowSize] = {0.0f};
     size_t depthWindowCount = 0;
     size_t depthWindowIndex = 0;
@@ -123,6 +125,7 @@ private:
         depthWindowCount = 0;
         depthWindowIndex = 0;
         depthFilterReady = false;
+        depthPostProcessor.reset();
 
         for (size_t i = 0; i < kDepthMedianWindowSize; ++i)
         {
@@ -169,11 +172,14 @@ private:
         {
             currentDepthFiltered = medianDepth;
             depthFilterReady = true;
+            currentDepthFiltered =
+                depthPostProcessor.apply(currentDepthFiltered);
             return;
         }
 
         currentDepthFiltered +=
             kDepthEmaAlpha * (medianDepth - currentDepthFiltered);
+        currentDepthFiltered = depthPostProcessor.apply(currentDepthFiltered);
     }
 };
 

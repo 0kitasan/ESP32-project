@@ -1,18 +1,22 @@
 #include "MqttLink.h"
 
 #include <string.h>
+#include <time.h>
 
 MqttLink *MqttLink::instance_ = nullptr;
 
 MqttLink::MqttLink()
     : mqttClient_(wifiClient_),
       commandSlots_{{MQTT_TOPIC_CMD_MISSION, "", false},
+                    {MQTT_TOPIC_CMD_DEBUG_MISSION, "", false},
                     {MQTT_TOPIC_CMD_MOTOR, "", false},
                     {MQTT_TOPIC_CMD_PUMP, "", false},
                     {MQTT_TOPIC_CMD_COUNTER, "", false}},
       emptyCmd_(""),
       lastWifiRetryMs_(0),
-      lastMqttRetryMs_(0)
+      lastMqttRetryMs_(0),
+      lastTimeSyncRetryMs_(0),
+      timeSyncStarted_(false)
 {
   instance_ = this;
 }
@@ -22,18 +26,19 @@ void MqttLink::begin()
   WiFi.mode(WIFI_STA);
   mqttClient_.setServer(MQTT_HOST, MQTT_PORT);
   mqttClient_.setCallback(MqttLink::mqttCallback);
+  mqttClient_.setBufferSize(MQTT_PACKET_BUFFER_SIZE);
 
   connectWiFi();
   connectMqtt();
 }
 
-void MqttLink::update()
+void MqttLink::update(bool allowReconnect)
 {
   unsigned long now = millis();
 
   if (WiFi.status() != WL_CONNECTED)
   {
-    if (now - lastWifiRetryMs_ >= 3000)
+    if (allowReconnect && now - lastWifiRetryMs_ >= 3000)
     {
       lastWifiRetryMs_ = now;
       connectWiFi();
@@ -41,9 +46,11 @@ void MqttLink::update()
     return;
   }
 
+  ensureTimeSync();
+
   if (!mqttClient_.connected())
   {
-    if (now - lastMqttRetryMs_ >= 3000)
+    if (allowReconnect && now - lastMqttRetryMs_ >= 3000)
     {
       lastMqttRetryMs_ = now;
       connectMqtt();
@@ -251,6 +258,7 @@ void MqttLink::connectWiFi()
   {
     Serial.print("WiFi connected, IP = ");
     Serial.println(WiFi.localIP());
+    ensureTimeSync();
   }
   else
   {
@@ -297,4 +305,30 @@ void MqttLink::connectMqtt()
     Serial.print("failed, rc=");
     Serial.println(mqttClient_.state());
   }
+}
+
+void MqttLink::ensureTimeSync()
+{
+  if (WiFi.status() != WL_CONNECTED)
+  {
+    return;
+  }
+
+  time_t unixTime = time(nullptr);
+  if (unixTime >= 946684800)
+  {
+    return;
+  }
+
+  unsigned long nowMs = millis();
+  if (timeSyncStarted_ && nowMs - lastTimeSyncRetryMs_ < 10000)
+  {
+    return;
+  }
+
+  lastTimeSyncRetryMs_ = nowMs;
+  timeSyncStarted_ = true;
+
+  Serial.println("Configuring NTP for UTC...");
+  configTime(0, 0, NTP_SERVER_1, NTP_SERVER_2, NTP_SERVER_3);
 }

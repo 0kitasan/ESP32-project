@@ -23,7 +23,8 @@ Control::Control() : Control(Params{}) {}
 Control::Control(const Params &params)
     : params_(params), targetDepthM_(0.0f), lastDepthM_(0.0f),
       filteredDepthRateMps_(0.0f), lastCommand_(0.0f), lastError_(0.0f),
-      lastLeadInput_(0.0f), lastLeadOutput_(0.0f), lastUpdateMs_(0),
+      lastLeadInput_(0.0f), lastLeadOutput_(0.0f), pulseCommand_(0.0f),
+      lastUpdateMs_(0), pulseActiveUntilMs_(0), pulseCooldownUntilMs_(0),
       initialized_(false), enabled_(true), holding_(false),
       leadInitialized_(false)
 {
@@ -45,12 +46,14 @@ void Control::reset(float currentDepthM, unsigned long nowMs)
   initialized_ = true;
   holding_ = fabs(lastError_) <= params_.holdEnterBandM;
   resetLeadCompensator();
+  resetPulseController();
 }
 
 void Control::setParams(const Params &params)
 {
   params_ = params;
   sanitizeParams();
+  resetPulseController();
 }
 
 const Control::Params &Control::getParams() const { return params_; }
@@ -69,6 +72,7 @@ void Control::setEnabled(bool enabled)
   {
     lastCommand_ = 0.0f;
     resetLeadCompensator();
+    resetPulseController();
   }
 }
 
@@ -120,6 +124,7 @@ float Control::update(float currentDepthM, unsigned long nowMs)
   {
     lastCommand_ = 0.0f;
     resetLeadCompensator();
+    resetPulseController();
     return lastCommand_;
   }
 
@@ -127,6 +132,61 @@ float Control::update(float currentDepthM, unsigned long nowMs)
       params_.kp * lastError_ - params_.kd * filteredDepthRateMps_;
   rawCommand = leadCompensator(rawCommand, dtS);
   rawCommand = constrain(rawCommand, -params_.outputLimit, params_.outputLimit);
+
+  if (params_.pulseEnabled && params_.pulseWindowM > 0.0f &&
+      fabs(lastError_) <= params_.pulseWindowM)
+  {
+    // Near the target, use short pulses instead of continuously driving the
+    // pump at its start threshold. This matches the pump's large dead zone
+    // better and leaves time for the float to respond between corrections.
+    if (signOrZero(pulseCommand_) != 0.0f &&
+        signOrZero(lastError_) != signOrZero(pulseCommand_))
+    {
+      resetPulseController();
+    }
+
+    if (pulseActiveUntilMs_ > nowMs && pulseCommand_ != 0.0f)
+    {
+      lastCommand_ = pulseCommand_;
+      return lastCommand_;
+    }
+
+    pulseCommand_ = 0.0f;
+
+    bool movingTowardTarget =
+        signOrZero(lastError_) == signOrZero(filteredDepthRateMps_) &&
+        fabs(filteredDepthRateMps_) >= params_.pulseCoastRateMps;
+    if (movingTowardTarget || pulseCooldownUntilMs_ > nowMs)
+    {
+      lastCommand_ = 0.0f;
+      return lastCommand_;
+    }
+
+    float pulseSign = signOrZero(lastError_);
+    if (pulseSign != 0.0f)
+    {
+      float pulseAlpha = constrain(fabs(lastError_) / params_.pulseWindowM,
+                                   0.0f, 1.0f);
+      unsigned long pulseOnMs = params_.pulseMinOnMs;
+      if (params_.pulseMaxOnMs > params_.pulseMinOnMs)
+      {
+        pulseOnMs += (unsigned long)((params_.pulseMaxOnMs -
+                                      params_.pulseMinOnMs) *
+                                     pulseAlpha);
+      }
+
+      pulseCommand_ = constrain(pulseSign * params_.pulseCmd,
+                                -params_.outputLimit, params_.outputLimit);
+      pulseActiveUntilMs_ = nowMs + pulseOnMs;
+      pulseCooldownUntilMs_ = pulseActiveUntilMs_ + params_.pulseOffMs;
+      lastCommand_ = pulseCommand_;
+      return lastCommand_;
+    }
+  }
+  else
+  {
+    resetPulseController();
+  }
 
   if (params_.minActuationCmd > 0.0f && fabs(rawCommand) < params_.minActuationCmd)
   {
@@ -169,6 +229,12 @@ void Control::sanitizeParams()
   params_.holdExitBandM = max(params_.holdEnterBandM, params_.holdExitBandM);
   params_.derivativeFilterAlpha =
       constrain(params_.derivativeFilterAlpha, 0.0f, 1.0f);
+  params_.pulseWindowM = max(0.0f, params_.pulseWindowM);
+  params_.pulseMinOnMs = max(1UL, params_.pulseMinOnMs);
+  params_.pulseMaxOnMs = max(params_.pulseMinOnMs, params_.pulseMaxOnMs);
+  params_.pulseOffMs = max(0UL, params_.pulseOffMs);
+  params_.pulseCoastRateMps = max(0.0f, params_.pulseCoastRateMps);
+  params_.pulseCmd = constrain(params_.pulseCmd, 0.0f, params_.outputLimit);
   params_.leadGain = max(0.0f, params_.leadGain);
   params_.leadTauS = max(0.0f, params_.leadTauS);
   params_.leadAlpha = constrain(params_.leadAlpha, 0.0f, 1.0f);
@@ -179,6 +245,13 @@ void Control::resetLeadCompensator()
   lastLeadInput_ = 0.0f;
   lastLeadOutput_ = 0.0f;
   leadInitialized_ = false;
+}
+
+void Control::resetPulseController()
+{
+  pulseCommand_ = 0.0f;
+  pulseActiveUntilMs_ = 0;
+  pulseCooldownUntilMs_ = 0;
 }
 
 float Control::leadCompensator(float input, float dtS)

@@ -1,86 +1,58 @@
 #!/usr/bin/env python3
 import argparse
-import json
+import re
 from pathlib import Path
 from xml.sax.saxutils import escape
 
 
-TIME_KEYS = ("time_ms", "time", "timestamp_ms", "t_ms")
-DEPTH_KEYS = ("depth_m", "depth", "depthMeter")
-LIST_KEYS = ("samples", "data", "records", "items")
-
-
-def pick_number(record, keys):
-    for key in keys:
-        value = record.get(key)
-        if value is None:
-            continue
-        return float(value)
-    raise KeyError(f"missing keys: {keys}")
-
-
-def normalize_record(record):
-    # MQTTX 导出的数据通常是外层包一层 payload
-    if isinstance(record, dict) and "payload" in record:
-        payload = record["payload"]
-        if isinstance(payload, dict):
-            record = payload
-        elif isinstance(payload, str):
-            # 有些导出里 payload 可能还是 JSON 字符串
-            record = json.loads(payload)
-
-    return {
-        "idx": record.get("idx", record.get("index")),
-        "time_ms": pick_number(record, TIME_KEYS),
-        "depth_m": pick_number(record, DEPTH_KEYS),
-    }
-
-
-def parse_json_payload(text):
-    payload = json.loads(text)
-
-    if isinstance(payload, list):
-        return [normalize_record(item) for item in payload if isinstance(item, dict)]
-
-    if isinstance(payload, dict):
-        for key in LIST_KEYS:
-            value = payload.get(key)
-            if isinstance(value, list):
-                return [normalize_record(item) for item in value if isinstance(item, dict)]
-        return [normalize_record(payload)]
-
-    raise ValueError("unsupported JSON structure")
-
-
-def parse_json_lines(text):
-    samples = []
-    for line_no, raw_line in enumerate(text.splitlines(), start=1):
-        line = raw_line.strip()
-        if not line:
-            continue
-        try:
-            item = json.loads(line)
-        except json.JSONDecodeError as exc:
-            raise ValueError(f"invalid JSON on line {line_no}: {exc}") from exc
-        if isinstance(item, dict):
-            samples.append(normalize_record(item))
-    return samples
+LINE_RE = re.compile(
+    r"^(?P<team>\S+)\s+"
+    r"(?P<hour>\d{2}):(?P<minute>\d{2}):(?P<second>\d{2})\s+UTC\s+"
+    r"(?P<pressure>[-+]?\d+(?:\.\d+)?)\s+kpa\s+"
+    r"(?P<depth>[-+]?\d+(?:\.\d+)?)\s+meters$",
+    re.IGNORECASE,
+)
 
 
 def load_samples(path):
-    text = path.read_text(encoding="utf-8").strip()
-    if not text:
-        raise ValueError("input file is empty")
+    samples = []
+    prev_seconds = None
+    day_offset = 0
 
-    try:
-        samples = parse_json_payload(text)
-    except json.JSONDecodeError:
-        samples = parse_json_lines(text)
+    for line_no, raw_line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+        line = raw_line.strip()
+        if not line:
+            continue
+
+        match = LINE_RE.match(line)
+        if not match:
+            raise ValueError(f"invalid line {line_no}: {line}")
+
+        hour = int(match.group("hour"))
+        minute = int(match.group("minute"))
+        second = int(match.group("second"))
+        seconds_of_day = hour * 3600 + minute * 60 + second
+
+        if prev_seconds is not None and seconds_of_day < prev_seconds:
+            day_offset += 24 * 3600
+        prev_seconds = seconds_of_day
+
+        samples.append(
+            {
+                "team": match.group("team"),
+                "time_s": seconds_of_day + day_offset,
+                "pressure_kpa": float(match.group("pressure")),
+                "depth_m": float(match.group("depth")),
+            }
+        )
 
     if not samples:
-        raise ValueError("no valid samples found")
+        raise ValueError("input file is empty")
 
-    samples.sort(key=lambda item: item["time_ms"])
+    base_time = samples[0]["time_s"]
+    for item in samples:
+        item["elapsed_s"] = item["time_s"] - base_time
+
     return samples
 
 
@@ -100,7 +72,7 @@ def build_svg(samples, title):
     plot_width = width - margin_left - margin_right
     plot_height = height - margin_top - margin_bottom
 
-    times_s = [item["time_ms"] / 1000.0 for item in samples]
+    times_s = [item["elapsed_s"] for item in samples]
     depths_m = [item["depth_m"] for item in samples]
 
     max_time = max(times_s) if times_s else 1.0
@@ -160,10 +132,10 @@ def build_svg(samples, title):
         parts.append(
             f'<polyline fill="none" stroke="#0b7285" stroke-width="3" stroke-linejoin="round" stroke-linecap="round" points="{points}"/>'
         )
-        for time_s, depth_m in zip(times_s, depths_m):
-            parts.append(
-                f'<circle cx="{x_pos(time_s):.1f}" cy="{y_pos(depth_m):.1f}" r="4" fill="#0b7285"/>'
-            )
+        for item in samples:
+            cx = x_pos(item["elapsed_s"])
+            cy = y_pos(item["depth_m"])
+            parts.append(f'<circle cx="{cx:.1f}" cy="{cy:.1f}" r="4" fill="#0b7285"/>')
 
     parts.append("</svg>")
     return "\n".join(parts)
@@ -171,16 +143,16 @@ def build_svg(samples, title):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Plot depth-time data exported from MQTT JSON messages into an SVG."
+        description="Plot VPD text packets into an SVG using top-left-origin depth coordinates."
     )
-    parser.add_argument("input", help="Path to a JSON or JSONL file.")
+    parser.add_argument("input", help="Path to a text file with VPD packets.")
     parser.add_argument(
         "--output",
-        help="Output SVG path. Defaults to <input_stem>_depth.svg next to the input file.",
+        help="Output SVG path. Defaults to <input_stem>_vpd.svg next to the input file.",
     )
     parser.add_argument(
         "--title",
-        default="Depth vs Time",
+        default="Vertical Profile Data",
         help="Chart title written into the SVG.",
     )
     args = parser.parse_args()
@@ -189,7 +161,7 @@ def main():
     samples = load_samples(input_path)
 
     output_path = Path(args.output) if args.output else input_path.with_name(
-        f"{input_path.stem}_depth.svg"
+        f"{input_path.stem}_vpd.svg"
     )
 
     svg = build_svg(samples, args.title)

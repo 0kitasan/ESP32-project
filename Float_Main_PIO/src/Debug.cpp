@@ -5,12 +5,12 @@ namespace
 {
   MqttLink *g_mqtt = nullptr;
   unsigned long g_logSeq = 0;
-  constexpr unsigned long kFakeHistoryIntervalMs = 50;
+  constexpr unsigned long kFakeHistoryIntervalMs = 10;
   constexpr unsigned long kFakeHistorySampleCount = 50;
   constexpr unsigned long kFakeMissionDurationMs = 29500;
   constexpr unsigned long kDebugReadyStatusIntervalMs = 2000;
   constexpr unsigned long kDebugHistoryLogIntervalMs = 500;
-  constexpr unsigned long kDebugUploadIntervalMs = 50;
+  constexpr unsigned long kDebugUploadIntervalMs = 10;
   constexpr size_t kDebugMaxHistorySamples = 256;
 
   struct DebugDepthSample
@@ -442,6 +442,17 @@ namespace
     {
       extractJsonFloat(lower, "kp", result.params.kp);
       extractJsonFloat(lower, "kd", result.params.kd);
+      extractJsonBool(lower, "pulse_enable", result.params.pulseEnabled);
+      extractJsonFloat(lower, "pulse_window_m", result.params.pulseWindowM);
+      extractJsonUnsignedLong(lower, "pulse_min_on_ms",
+                              result.params.pulseMinOnMs);
+      extractJsonUnsignedLong(lower, "pulse_max_on_ms",
+                              result.params.pulseMaxOnMs);
+      extractJsonUnsignedLong(lower, "pulse_off_ms",
+                              result.params.pulseOffMs);
+      extractJsonFloat(lower, "pulse_coast_rate_mps",
+                       result.params.pulseCoastRateMps);
+      extractJsonFloat(lower, "pulse_cmd", result.params.pulseCmd);
       extractJsonBool(lower, "lead_enable", result.params.leadEnabled);
       extractJsonFloat(lower, "lead_gain", result.params.leadGain);
       extractJsonFloat(lower, "lead_tau_s", result.params.leadTauS);
@@ -464,6 +475,17 @@ namespace
     {
       extractAssignedFloat(lower, "kp", result.params.kp);
       extractAssignedFloat(lower, "kd", result.params.kd);
+      extractAssignedBool(lower, "pulse_enable", result.params.pulseEnabled);
+      extractAssignedFloat(lower, "pulse_window_m", result.params.pulseWindowM);
+      extractAssignedUnsignedLong(lower, "pulse_min_on_ms",
+                                  result.params.pulseMinOnMs);
+      extractAssignedUnsignedLong(lower, "pulse_max_on_ms",
+                                  result.params.pulseMaxOnMs);
+      extractAssignedUnsignedLong(lower, "pulse_off_ms",
+                                  result.params.pulseOffMs);
+      extractAssignedFloat(lower, "pulse_coast_rate_mps",
+                           result.params.pulseCoastRateMps);
+      extractAssignedFloat(lower, "pulse_cmd", result.params.pulseCmd);
       extractAssignedBool(lower, "lead_enable", result.params.leadEnabled);
       extractAssignedFloat(lower, "lead_gain", result.params.leadGain);
       extractAssignedFloat(lower, "lead_tau_s", result.params.leadTauS);
@@ -526,11 +548,25 @@ namespace
   bool publishMissionParams(MqttLink &mqtt, const Control::Params &params)
   {
     String payload;
-    payload.reserve(144);
+    payload.reserve(280);
     payload += "{\"kp\":";
     payload += String(params.kp, 3);
     payload += ",\"kd\":";
     payload += String(params.kd, 3);
+    payload += ",\"pulse_enable\":";
+    payload += String(params.pulseEnabled ? 1 : 0);
+    payload += ",\"pulse_window_m\":";
+    payload += String(params.pulseWindowM, 3);
+    payload += ",\"pulse_min_on_ms\":";
+    payload += String(params.pulseMinOnMs);
+    payload += ",\"pulse_max_on_ms\":";
+    payload += String(params.pulseMaxOnMs);
+    payload += ",\"pulse_off_ms\":";
+    payload += String(params.pulseOffMs);
+    payload += ",\"pulse_coast_rate_mps\":";
+    payload += String(params.pulseCoastRateMps, 3);
+    payload += ",\"pulse_cmd\":";
+    payload += String(params.pulseCmd, 3);
     payload += ",\"lead_enable\":";
     payload += String(params.leadEnabled ? 1 : 0);
     payload += ",\"lead_gain\":";
@@ -874,7 +910,7 @@ void debugDepthMission(MqttLink &mqtt, SensorDriver &sensor, Pump &pump,
     msg += ", force_drain_duration_ms=";
     msg += String(activeForceDrainDurationMs);
     msg += ", cmd_topic=";
-    msg += MQTT_TOPIC_CMD_MISSION;
+    msg += MQTT_TOPIC_CMD_DEBUG_MISSION;
     debugInfo(msg);
     phase = CONTROL_TO_DEPTH;
   };
@@ -896,13 +932,13 @@ void debugDepthMission(MqttLink &mqtt, SensorDriver &sensor, Pump &pump,
 
   auto handlePendingCommand = [&]()
   {
-    if (!mqtt.hasNewCommand(MQTT_TOPIC_CMD_MISSION))
+    if (!mqtt.hasNewCommand(MQTT_TOPIC_CMD_DEBUG_MISSION))
     {
       return;
     }
 
-    String rawCmd = mqtt.latestCommand(MQTT_TOPIC_CMD_MISSION);
-    mqtt.clearCommand(MQTT_TOPIC_CMD_MISSION);
+    String rawCmd = mqtt.latestCommand(MQTT_TOPIC_CMD_DEBUG_MISSION);
+    mqtt.clearCommand(MQTT_TOPIC_CMD_DEBUG_MISSION);
 
     MissionCommand cmd =
         parseMissionCommand(rawCmd, forceDrainAfterMs, forceDrainDurationMs);
@@ -952,7 +988,7 @@ void debugDepthMission(MqttLink &mqtt, SensorDriver &sensor, Pump &pump,
       String msg = "depth mission ready, current_depth_m=";
       msg += String(depth, 3);
       msg += ", wait cmd on ";
-      msg += MQTT_TOPIC_CMD_MISSION;
+      msg += MQTT_TOPIC_CMD_DEBUG_MISSION;
       debugInfo(msg);
     }
 

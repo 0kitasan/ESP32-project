@@ -1,17 +1,21 @@
 ## Float Main PIO
 
-用于带浮力引擎的浮标调试。当前推荐使用 `debugDepthMission(...)` 这条链路：
+用于带浮力引擎的浮标正式任务与调试。
 
-- 岸上通过 MQTT 下发目标深度命令
-- 浮标收到命令后开始下潜
-- 任务运行设定时长后直接强制上浮
-- 浮出水面后再通过 MQTT 回传历史深度数据
+当前 `main` 默认运行正式 `Mission` 状态机：
+
+- 岸上通过 MQTT 下发任务开始命令
+- 第 1 段下潜到 `1.1 m` 并悬停 `30 s`
+- 第 2 段上浮到 `0.4 m` 并悬停 `30 s`
+- 随后强制上浮
+- 浮出水面并重新连上 MQTT 后回传历史数据
 
 ## MQTT Topic
 
 当前 topic 统一使用 `/float_sjtu` 前缀。命令 topic 已按测试入口拆开：
 
 - `MQTT_TOPIC_CMD_MISSION = /float_sjtu/cmd/mission`
+- `MQTT_TOPIC_CMD_DEBUG_MISSION = /float_sjtu/cmd/debug_mission`
 - `MQTT_TOPIC_CMD_MOTOR = /float_sjtu/cmd/motor`
 - `MQTT_TOPIC_CMD_PUMP = /float_sjtu/cmd/pump`
 - `MQTT_TOPIC_CMD_COUNTER = /float_sjtu/cmd/counter`
@@ -24,7 +28,9 @@
 其中：
 
 - `/float_sjtu/cmd/mission`
-任务状态机命令。
+正式任务状态机命令。
+- `/float_sjtu/cmd/debug_mission`
+单目标 `debugDepthMission(...)` 调试命令。
 - `/float_sjtu/cmd/motor`
 电机直驱测试命令。
 - `/float_sjtu/cmd/pump`
@@ -45,7 +51,7 @@
 当前几条主要调试入口如下：
 
 - `debugDepthMission(...)`
-使用 `/float_sjtu/cmd/mission` 接收任务命令，使用 `/float_sjtu/status` 回传任务状态，使用 `/float_sjtu/param` 回传当前控制参数，使用 `/float_sjtu/history` 回传历史数据。
+使用 `/float_sjtu/cmd/debug_mission` 接收单目标调试命令，使用 `/float_sjtu/status` 回传任务状态，使用 `/float_sjtu/param` 回传当前控制参数，使用 `/float_sjtu/history` 回传历史数据。
 - `debugMotorRemote(...)`
 使用 `/float_sjtu/cmd/motor` 接收电机推力命令，调试日志发到 `/float_sjtu/debug`。
 - `debugPumpRemote(...)`
@@ -55,11 +61,19 @@
 - `debugSensor(...)`
 不接收命令，只在本地串口和 `/float_sjtu/debug` 输出传感器读数。
 
-## `debugDepthMission` 思路
+## 正式 Mission
 
-`debugDepthMission(...)` 是一个非阻塞状态机，每次 `loop()` 调用一次。
+正式 `Mission` 是一个非阻塞状态机，每次 `loop()` 调用一次。
 
-PD 控制器有一套默认参数，定义在 `include/Config.h`：
+默认任务参数定义在 `include/Config.h`：
+
+- `MISSION_STAGE1_TARGET_DEPTH_M_DEFAULT = 1.10`
+- `MISSION_STAGE1_HOLD_MS_DEFAULT = 30000`
+- `MISSION_STAGE2_TARGET_DEPTH_M_DEFAULT = 0.40`
+- `MISSION_STAGE2_HOLD_MS_DEFAULT = 30000`
+- `MISSION_SURFACE_DRAIN_DURATION_MS_DEFAULT = 10000`
+
+控制器默认参数仍然沿用：
 
 - `CTRL_KP_DEFAULT`
 - `CTRL_KD_DEFAULT`
@@ -73,106 +87,73 @@ PD 控制器有一套默认参数，定义在 `include/Config.h`：
 - `CTRL_LEAD_TAU_S_DEFAULT`
 - `CTRL_LEAD_ALPHA_DEFAULT`
 
-每次新任务开始时，先加载这套默认参数；如果 MQTT 开始命令里带了新的 `kp/kd/lead_*`，就用命令里的值覆盖默认值。
-
-深度数据会先经过 `SensorDriver::getDepthFilter()` 的滤波链路：
-
-- 先做 `5` 点中位数滤波，消除单个异常毛刺
-- 再做一层 EMA，当前 `alpha = 0.35`
-
-`debugDepthMission(...)` 中的控制输入、状态上报和历史记录，当前都使用这个滤波后的深度值。
-
-方向约定统一为：
-
-- 深度向下为正，越深数值越大
-- 泵命令 `> 0` 表示吸水增重下潜
-- 泵命令 `< 0` 表示排水减重上浮
-
-如果硬件电机接线反了，只在 `Pump` 内部做极性修正，不再改变上层控制语义。
+正式任务流程：
 
 1. `WAIT_START_CMD`
-浮标上电后先进入待命状态，读取当前深度，并通过 `/float_sjtu/status` 周期上报当前深度。
+上电待命，通过 `/float_sjtu/status` 周期上报当前深度。
 
-2. 收到目标深度命令
-岸上通过 `/float_sjtu/cmd/mission` 下发目标深度后，浮标开始任务。
+2. `STAGE1_TO_DEPTH`
+下潜到第一阶段目标深度，默认 `1.1 m`。
 
-3. `CONTROL_TO_DEPTH`
-使用 `Control` 中的 PD 控制器驱动泵，让浮标向目标深度移动并尝试悬停。
-如果启用了超前校正，还会在 PD 输出后串联一个一阶超前校正环节：
+3. `HOLD_STAGE1`
+在第一阶段目标附近持续悬停，默认 `30 s`。
 
-```text
-G_lead(s) = K * (T s + 1) / (alpha T s + 1)
-```
+4. `STAGE2_TO_DEPTH`
+上浮到第二阶段目标深度，默认 `0.4 m`。
 
-其中：
+5. `HOLD_STAGE2`
+在第二阶段目标附近持续悬停，默认 `30 s`。
 
-- `lead_enable`
-是否启用超前校正，`0/1`。
-- `lead_gain`
-超前环节增益 `K`。
-- `lead_tau_s`
-超前环节时间常数 `T`，单位秒。
-- `lead_alpha`
-极点/零点比例系数 `alpha`。当前实现按超前环节使用，建议取 `0 < alpha < 1`。
+6. `FORCE_SURFACE`
+第二阶段完成后固定全速排水，默认持续 `10000 ms`。
 
-4. 记录历史数据
-任务过程中每 `500ms` 记录一条深度样本到 RAM 缓冲区。
-当前每条样本只包含：
+7. `UPLOADING_HISTORY`
+浮出水面并重新连上 MQTT 后，按 `50ms/条` 节奏回传历史数据。
 
-- `time_ms`
-- `depth_m`
-- `control_output`
+正式任务的历史数据不是高频调试曲线，而是比赛包。
 
-当前缓冲区容量是 `256` 条。
+每个悬停阶段会记录 `7` 个数据包，对应：
 
-5. `FORCE_DRAIN`
-任务运行满设定时长后，直接强制排水固定时长，再进入历史上传阶段。
+- `0 s`
+- `5 s`
+- `10 s`
+- `15 s`
+- `20 s`
+- `25 s`
+- `30 s`
 
-默认参数：
+其中 `0 s` 表示“第一次进入规定深度范围”的起点。
 
-- `force_drain_after_ms = 30000`
-- `force_drain_duration_ms = 10000`
+当前正式任务最多记录两段悬停，因此缓冲区容量固定为 `14` 条。
 
-6. `UPLOADING_HISTORY`
-检测到浮标浮出水面并重新连上 MQTT 后，按 `50ms/条` 的节奏把历史数据逐条发到 `/float_sjtu/history`。
+UTC 时间当前使用板载系统时钟；如果没有额外做 NTP/RTC 对时，则会回传占位值 `00:00:00 UTC`。
 
-## 命令格式
+### 正式 Mission 命令格式
 
-推荐发送到 `/float_sjtu/cmd/mission` 的命令：
+发送到 `/float_sjtu/cmd/mission`。
+
+使用默认任务参数直接开始：
 
 ```text
-start:2.5
+start
 ```
 
-表示开始任务，并把目标深度设为 `2.5 m`。
+覆盖任务参数与控制参数：
+
+```text
+start,stage1_depth_m=1.10,stage1_hold_ms=30000,stage2_depth_m=0.40,stage2_hold_ms=30000,surface_drain_duration_ms=10000,kp=1.10,kd=0.45,lead_enable=1,lead_gain=1.00,lead_tau_s=0.15,lead_alpha=0.35
+```
 
 也支持 JSON：
 
 ```json
-{"target_depth_m": 2.5}
-```
-
-如果要在任务开始时覆盖 PD 参数，可以这样发：
-
-```text
-start:2.5,kp=1.10,kd=0.45
-```
-
-或者：
-
-```json
-{"target_depth_m": 2.5, "kp": 1.10, "kd": 0.45}
-```
-
-如果要同时覆盖超前校正参数，可以这样发：
-
-```text
-start:2.5,kp=1.10,kd=0.45,lead_enable=1,lead_gain=1.00,lead_tau_s=0.15,lead_alpha=0.35
-```
-
-```json
 {
-  "target_depth_m": 2.5,
+  "start": 1,
+  "stage1_depth_m": 1.10,
+  "stage1_hold_ms": 30000,
+  "stage2_depth_m": 0.40,
+  "stage2_hold_ms": 30000,
+  "surface_drain_duration_ms": 10000,
   "kp": 1.10,
   "kd": 0.45,
   "lead_enable": 1,
@@ -182,34 +163,28 @@ start:2.5,kp=1.10,kd=0.45,lead_enable=1,lead_gain=1.00,lead_tau_s=0.15,lead_alph
 }
 ```
 
-也支持同时覆盖强制排水时序：
+也支持以下命令：
+
+- `status`
+立即回传一次当前状态。
+- `depth?`
+等价于 `status`。
+- `surface`
+如果任务还未开始，会被忽略。
+
+## `debugDepthMission` 调试入口
+
+`debugDepthMission(...)` 仍然保留，用于单目标深度调试。它现在监听：
+
+```text
+/float_sjtu/cmd/debug_mission
+```
+
+调试命令格式仍然是原来的单目标格式，例如：
 
 ```text
 start:2.5,kp=1.10,kd=0.45,lead_enable=1,lead_gain=1.00,lead_tau_s=0.15,lead_alpha=0.35,drain_after_ms=30000,drain_duration_ms=10000
 ```
-
-```json
-{
-  "target_depth_m": 2.5,
-  "kp": 1.10,
-  "kd": 0.45,
-  "lead_enable": 1,
-  "lead_gain": 1.00,
-  "lead_tau_s": 0.15,
-  "lead_alpha": 0.35,
-  "force_drain_after_ms": 30000,
-  "force_drain_duration_ms": 10000
-}
-```
-
-还支持以下调试命令：
-
-- `status`
-立即回传一次当前状态和当前深度。
-- `depth?`
-等价于 `status`。
-- `surface`
-如果任务还未开始，会被忽略。后续可以继续扩展为手动强制上浮命令。
 
 ## `debugMotorRemote` 命令
 
@@ -287,8 +262,7 @@ pump:-0.90,2000,limit=0
   "time_ms": 0,
   "depth_m": 0.003,
   "target_depth_m": 0.000,
-  "force_drain_after_ms": 30000,
-  "force_drain_duration_ms": 10000,
+  "stage": 0,
   "history_count": 0,
   "upload_index": 0
 }
@@ -301,10 +275,9 @@ pump:-0.90,2000,limit=0
   "state": "started",
   "time_ms": 0,
   "depth_m": 0.012,
-  "target_depth_m": 2.500,
-  "force_drain_after_ms": 30000,
-  "force_drain_duration_ms": 10000,
-  "history_count": 1,
+  "target_depth_m": 1.100,
+  "stage": 1,
+  "history_count": 0,
   "upload_index": 0
 }
 ```
@@ -313,6 +286,11 @@ pump:-0.90,2000,limit=0
 
 ```json
 {
+  "stage1_depth_m": 1.100,
+  "stage1_hold_ms": 30000,
+  "stage2_depth_m": 0.400,
+  "stage2_hold_ms": 30000,
+  "surface_drain_duration_ms": 10000,
   "kp": 1.100,
   "kd": 0.450,
   "lead_enable": 1,
@@ -324,13 +302,15 @@ pump:-0.90,2000,limit=0
 
 ## History 示例
 
-出水后 `/float_sjtu/history` 会逐条发送：
+出水后 `/float_sjtu/history` 会逐条发送比赛格式文本，例如：
 
-```json
-{
-  "idx": 12,
-  "time_ms": 6000,
-  "depth_m": 2.347,
-  "control_output": 0.812
-}
+```text
+PN01 01:51:42 UTC 9.8 kpa 1.00 meters
 ```
+
+## 绘图脚本
+
+- `tools/plot_depth_json.py`
+用于绘制 debug 历史 JSON/JSONL，坐标采用左上为原点、时间向右、深度向下。
+- `tools/plot_vpd_text.py`
+用于绘制正式比赛包文本格式，例如 `PN01 01:51:42 UTC 9.8 kpa 1.00 meters`。

@@ -10,7 +10,7 @@ class MqttLink
 public:
   MqttLink();
   void begin();
-  void update();
+  void update(bool allowReconnect = true);
 
   bool isWifiConnected() const;
   bool isMqttConnected(); // const
@@ -39,7 +39,7 @@ private:
     bool hasNewCmd;
   };
 
-  static constexpr size_t kCommandSlotCount = 4;
+  static constexpr size_t kCommandSlotCount = 5;
 
   WiFiClient wifiClient_;
   PubSubClient mqttClient_;
@@ -49,6 +49,8 @@ private:
 
   unsigned long lastWifiRetryMs_;
   unsigned long lastMqttRetryMs_;
+  unsigned long lastTimeSyncRetryMs_;
+  bool timeSyncStarted_;
 
   static MqttLink *instance_;
   static void mqttCallback(char *topic, byte *payload, unsigned int length);
@@ -58,5 +60,6 @@ private:
   void handleMessage(char *topic, byte *payload, unsigned int length);
   void connectWiFi();
   void connectMqtt();
+  void ensureTimeSync();
 };
 #endif
